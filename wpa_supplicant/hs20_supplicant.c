@@ -20,6 +20,7 @@
 #include "driver_i.h"
 #include "config.h"
 #include "scan.h"
+#include "notify.h"
 #include "bss.h"
 #include "bssid_ignore.h"
 #include "gas_query.h"
@@ -72,7 +73,12 @@ void hs20_configure_frame_filters(struct wpa_supplicant *wpa_s)
 	const u8 *ext_capa;
 	u32 filter = 0;
 
-	if (!bss || !is_hs20_network(wpa_s, wpa_s->current_ssid, bss)) {
+	if (!bss || !is_hs20_network(wpa_s, wpa_s->current_ssid, bss)
+#ifndef ANDROID
+			// HS 2.0 Configuration is not used in AOSP
+			|| !is_hs20_config(wpa_s)
+#endif
+			) {
 		wpa_printf(MSG_DEBUG,
 			   "Not configuring frame filtering - BSS " MACSTR
 			   " is not a Hotspot 2.0 network", MAC2STR(bssid));
@@ -157,11 +163,15 @@ int get_hs20_version(struct wpa_bss *bss)
 	return ((ie[6] >> 4) & 0x0f) + 1;
 }
 
+int is_hs20_config(struct wpa_supplicant *wpa_s)
+{
+	return wpa_s->conf->hs20;
+}
 
 int is_hs20_network(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid,
 		    struct wpa_bss *bss)
 {
-	if (!wpa_s->conf->hs20 || !ssid)
+	if (!ssid)
 		return 0;
 
 	if (ssid->parent_cred)
@@ -479,6 +489,10 @@ static int hs20_process_icon_binary_file(struct wpa_supplicant *wpa_s,
 				RX_HS20_ICON MACSTR " %s %u",
 				MAC2STR(sa), icon->file_name,
 				(unsigned int) icon->image_len);
+			wpas_notify_hs20_icon_query_done(wpa_s, sa,
+							 icon->file_name,
+							 icon->image,
+							 icon->image_len);
 			return 0;
 		}
 	}
@@ -1284,6 +1298,7 @@ void hs20_rx_subscription_remediation(struct wpa_supplicant *wpa_s,
 			osu_method, url);
 	else
 		wpa_msg(wpa_s, MSG_INFO, HS20_SUBSCRIPTION_REMEDIATION);
+	wpas_notify_hs20_rx_subscription_remediation(wpa_s, url, osu_method);
 }
 
 
@@ -1297,6 +1312,7 @@ void hs20_rx_deauth_imminent_notice(struct wpa_supplicant *wpa_s, u8 code,
 
 	wpa_msg(wpa_s, MSG_INFO, HS20_DEAUTH_IMMINENT_NOTICE "%u %u %s",
 		code, reauth_delay, url);
+	wpas_notify_hs20_rx_deauth_imminent_notice(wpa_s, code, reauth_delay, url);
 
 	if (code == HS20_DEAUTH_REASON_CODE_BSS) {
 		wpa_printf(MSG_DEBUG, "HS 2.0: Add BSS to ignore list");
@@ -1339,6 +1355,7 @@ void hs20_rx_t_c_acceptance(struct wpa_supplicant *wpa_s, const char *url)
 	}
 
 	wpa_msg(wpa_s, MSG_INFO, HS20_T_C_ACCEPTANCE "%s", url);
+	wpas_notify_hs20_rx_terms_and_conditions_acceptance(wpa_s, url);
 }
 
 

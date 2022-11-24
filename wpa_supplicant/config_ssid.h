@@ -13,7 +13,6 @@
 #include "utils/list.h"
 #include "eap_peer/eap_config.h"
 
-
 #define DEFAULT_EAP_WORKAROUND ((unsigned int) -1)
 #define DEFAULT_EAPOL_FLAGS (EAPOL_FLAG_REQUIRE_KEY_UNICAST | \
 			     EAPOL_FLAG_REQUIRE_KEY_BROADCAST)

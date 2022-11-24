@@ -28,6 +28,7 @@
 #include "scan.h"
 #include "notify.h"
 #include "dpp_supplicant.h"
+#include "aidl.h"
 
 
 static int wpas_dpp_listen_start(struct wpa_supplicant *wpa_s,
@@ -586,6 +587,7 @@ static void wpas_dpp_reply_wait_timeout(void *eloop_ctx, void *timeout_ctx)
 		wpa_printf(MSG_INFO,
 			   "DPP: No response received from responder - stopping initiation attempt");
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_AUTH_INIT_FAILED);
+		wpas_notify_dpp_timeout(wpa_s);
 		offchannel_send_action_done(wpa_s);
 		wpas_dpp_listen_stop(wpa_s);
 		dpp_auth_deinit(auth);
@@ -697,6 +699,7 @@ static int wpas_dpp_auth_init_next(struct wpa_supplicant *wpa_s)
 			wpa_printf(MSG_INFO,
 				   "DPP: No response received from responder - stopping initiation attempt");
 			wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_AUTH_INIT_FAILED);
+			wpas_notify_dpp_timeout(wpa_s);
 			eloop_cancel_timeout(wpas_dpp_reply_wait_timeout,
 					     wpa_s, NULL);
 			offchannel_send_action_done(wpa_s);
@@ -1439,6 +1442,9 @@ static int wpas_dpp_process_config(struct wpa_supplicant *wpa_s,
 		return -1;
 
 	wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_NETWORK_ID "%d", ssid->id);
+
+	wpas_notify_dpp_config_received(wpa_s, ssid);
+
 	if (wpa_s->conf->dpp_config_processing == 2)
 		ssid->disabled = 0;
 
@@ -1733,8 +1739,10 @@ static void wpas_dpp_gas_resp_cb(void *ctx, const u8 *addr, u8 dialog_token,
 	}
 #endif /* CONFIG_TESTING_OPTIONS */
 fail:
-	if (status != DPP_STATUS_OK)
+	if (status != DPP_STATUS_OK) {
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_FAILED);
+		wpas_notify_dpp_configuration_failure(wpa_s);
+	}
 #ifdef CONFIG_DPP2
 	if (auth->peer_version >= 2 &&
 	    auth->conf_resp_status == DPP_STATUS_OK) {
@@ -1838,6 +1846,7 @@ static void wpas_dpp_auth_success(struct wpa_supplicant *wpa_s, int initiator)
 {
 	wpa_printf(MSG_DEBUG, "DPP: Authentication succeeded");
 	wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_AUTH_SUCCESS "init=%d", initiator);
+	wpas_notify_dpp_auth_success(wpa_s);
 #ifdef CONFIG_TESTING_OPTIONS
 	if (dpp_test == DPP_TEST_STOP_AT_AUTH_CONF) {
 		wpa_printf(MSG_INFO,
@@ -1894,6 +1903,7 @@ static void wpas_dpp_rx_auth_resp(struct wpa_supplicant *wpa_s, const u8 *src,
 		if (auth->auth_resp_status == DPP_STATUS_RESPONSE_PENDING) {
 			wpa_printf(MSG_DEBUG,
 				   "DPP: Start wait for full response");
+			wpas_notify_dpp_resp_pending(wpa_s);
 			offchannel_send_action_done(wpa_s);
 			wpas_dpp_listen_start(wpa_s, auth->curr_freq);
 			return;
@@ -1938,6 +1948,7 @@ static void wpas_dpp_rx_auth_conf(struct wpa_supplicant *wpa_s, const u8 *src,
 
 	if (dpp_auth_conf_rx(auth, hdr, buf, len) < 0) {
 		wpa_printf(MSG_DEBUG, "DPP: Authentication failed");
+		wpas_notify_dpp_auth_failure(wpa_s);
 		return;
 	}
 
@@ -1959,6 +1970,7 @@ static void wpas_dpp_config_result_wait_timeout(void *eloop_ctx,
 	wpa_printf(MSG_DEBUG,
 		   "DPP: Timeout while waiting for Configuration Result");
 	wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_FAILED);
+	wpas_notify_dpp_configuration_failure(wpa_s);
 	dpp_auth_deinit(auth);
 	wpa_s->dpp_auth = NULL;
 }
@@ -1976,6 +1988,7 @@ static void wpas_dpp_conn_status_result_wait_timeout(void *eloop_ctx,
 	wpa_printf(MSG_DEBUG,
 		   "DPP: Timeout while waiting for Connection Status Result");
 	wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONN_STATUS_RESULT "timeout");
+	wpas_notify_dpp_timeout(wpa_s);
 	wpas_dpp_listen_stop(wpa_s);
 	dpp_auth_deinit(auth);
 	wpa_s->dpp_auth = NULL;
@@ -2024,6 +2037,7 @@ static void wpas_dpp_rx_conf_result(struct wpa_supplicant *wpa_s, const u8 *src,
 		wpa_msg(wpa_s, MSG_INFO,
 			DPP_EVENT_CONF_SENT "wait_conn_status=1");
 		wpa_printf(MSG_DEBUG, "DPP: Wait for Connection Status Result");
+		wpas_notify_dpp_config_accepted(wpa_s);
 		eloop_cancel_timeout(wpas_dpp_config_result_wait_timeout,
 				     wpa_s, NULL);
 		auth->waiting_conn_status_result = 1;
@@ -2041,10 +2055,14 @@ static void wpas_dpp_rx_conf_result(struct wpa_supplicant *wpa_s, const u8 *src,
 	}
 	offchannel_send_action_done(wpa_s);
 	wpas_dpp_listen_stop(wpa_s);
-	if (status == DPP_STATUS_OK)
+	if (status == DPP_STATUS_OK) {
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_SENT);
-	else
+		wpas_notify_dpp_config_sent(wpa_s);
+	}
+	else {
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_FAILED);
+		wpas_notify_dpp_config_rejected(wpa_s);
+	}
 	dpp_auth_deinit(auth);
 	wpa_s->dpp_auth = NULL;
 	eloop_cancel_timeout(wpas_dpp_config_result_wait_timeout, wpa_s, NULL);
@@ -2075,6 +2093,8 @@ static void wpas_dpp_rx_conn_status_result(struct wpa_supplicant *wpa_s,
 		"result=%d ssid=%s channel_list=%s",
 		status, wpa_ssid_txt(ssid, ssid_len),
 		channel_list ? channel_list : "N/A");
+	wpas_notify_dpp_conn_status(wpa_s, status, wpa_ssid_txt(ssid, ssid_len),
+			channel_list, auth->band_list, auth->band_list_size);
 	os_free(channel_list);
 	offchannel_send_action_done(wpa_s);
 	wpas_dpp_listen_stop(wpa_s);
@@ -3312,8 +3332,10 @@ wpas_dpp_gas_req_handler(void *ctx, void *resp_ctx, const u8 *sa,
 		return NULL;
 	}
 
-	if (!resp)
+	if (!resp) {
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_FAILED);
+		wpas_notify_dpp_configuration_failure(wpa_s);
+	}
 	auth->conf_resp = resp;
 	return resp;
 }
@@ -3355,6 +3377,7 @@ wpas_dpp_gas_status_handler(void *ctx, struct wpabuf *resp, int ok)
 	    auth->conf_resp_status == DPP_STATUS_OK &&
 	    !auth->waiting_conf_result) {
 		wpa_printf(MSG_DEBUG, "DPP: Wait for Configuration Result");
+		wpas_notify_dpp_config_sent_wait_response(wpa_s);
 		auth->waiting_conf_result = 1;
 		auth->conf_resp = NULL;
 		wpabuf_free(resp);
@@ -3368,10 +3391,14 @@ wpas_dpp_gas_status_handler(void *ctx, struct wpabuf *resp, int ok)
 #endif /* CONFIG_DPP2 */
 	offchannel_send_action_done(wpa_s);
 	wpas_dpp_listen_stop(wpa_s);
-	if (ok)
+	if (ok) {
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_SENT);
-	else
+		wpas_notify_dpp_config_sent(wpa_s);
+	}
+	else {
 		wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_CONF_FAILED);
+		wpas_notify_dpp_configuration_failure(wpa_s);
+	}
 	dpp_auth_deinit(wpa_s->dpp_auth);
 	wpa_s->dpp_auth = NULL;
 	wpabuf_free(resp);

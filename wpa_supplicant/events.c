@@ -50,6 +50,7 @@
 #include "mesh_mpm.h"
 #include "wmm_ac.h"
 #include "dpp_supplicant.h"
+#include "rsn_supp/wpa_i.h"
 
 
 #define MAX_OWE_TRANSITION_BSS_SELECT_COUNT 5
@@ -1067,7 +1068,7 @@ static void owe_trans_ssid(struct wpa_supplicant *wpa_s, struct wpa_bss *bss,
 }
 
 
-static int disabled_freq(struct wpa_supplicant *wpa_s, int freq)
+int disabled_freq(struct wpa_supplicant *wpa_s, int freq)
 {
 	int i, j;
 
@@ -1318,6 +1319,9 @@ static bool wpa_scan_res_ok(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid,
 #ifdef CONFIG_SAE
 	if ((wpa_s->conf->sae_pwe == 1 || ssid->sae_password_id) &&
 	    wpa_s->conf->sae_pwe != 3 && wpa_key_mgmt_sae(ssid->key_mgmt) &&
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	    !(wpa_key_mgmt_wpa_psk_no_sae(ssid->key_mgmt)) &&
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 	    !(rsnxe_capa & BIT(WLAN_RSNX_CAPAB_SAE_H2E))) {
 		if (debug_print)
 			wpa_dbg(wpa_s, MSG_DEBUG,
@@ -2383,6 +2387,7 @@ static int wpas_select_network_from_last_scan(struct wpa_supplicant *wpa_s,
 
 			wpa_msg_ctrl(wpa_s, MSG_INFO,
 				     WPA_EVENT_NETWORK_NOT_FOUND);
+			wpas_notify_network_not_found(wpa_s);
 		}
 	}
 	return 0;
@@ -2891,6 +2896,9 @@ static int wpa_supplicant_event_associnfo(struct wpa_supplicant *wpa_s,
 	const u8 *p;
 	u8 bssid[ETH_ALEN];
 	bool bssid_known;
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	struct wpa_ie_data ie;
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 	wpa_dbg(wpa_s, MSG_DEBUG, "Association info event");
 	bssid_known = wpa_drv_get_bssid(wpa_s, bssid) == 0;
@@ -2939,6 +2947,8 @@ static int wpa_supplicant_event_associnfo(struct wpa_supplicant *wpa_s,
 					   data->assoc_info.resp_ies_len,
 					   &resp_elems, 0) != ParseFailed) {
 			wpa_s->connection_set = 1;
+			wpa_s->connection_11b_only = supp_rates_11b_only(&req_elems) ||
+				supp_rates_11b_only(&resp_elems);
 			wpa_s->connection_ht = req_elems.ht_capabilities &&
 				resp_elems.ht_capabilities;
 			/* Do not include subset of VHT on 2.4 GHz vendor
@@ -2951,6 +2961,30 @@ static int wpa_supplicant_event_associnfo(struct wpa_supplicant *wpa_s,
 				 BAND_2_4_GHZ);
 			wpa_s->connection_he = req_elems.he_capabilities &&
 				resp_elems.he_capabilities;
+
+			int max_nss_rx_req = get_max_nss_capability(&req_elems, 1);
+			int max_nss_rx_resp = get_max_nss_capability(&resp_elems, 1);
+			wpa_s->connection_max_nss_rx = (max_nss_rx_resp > max_nss_rx_req) ?
+				max_nss_rx_req : max_nss_rx_resp;
+			int max_nss_tx_req = get_max_nss_capability(&req_elems, 0);
+			int max_nss_tx_resp = get_max_nss_capability(&resp_elems, 0);
+			wpa_s->connection_max_nss_tx = (max_nss_tx_resp > max_nss_tx_req) ?
+				max_nss_tx_req : max_nss_tx_resp;
+
+			struct supported_chan_width sta_supported_chan_width =
+				get_supported_channel_width(&req_elems);
+			enum chan_width ap_operation_chan_width =
+				get_operation_channel_width(&resp_elems);
+			if (wpa_s->connection_vht || wpa_s->connection_he) {
+				wpa_s->connection_channel_bandwidth =
+					get_sta_operation_chan_width(ap_operation_chan_width,
+					sta_supported_chan_width);
+			} else if (wpa_s->connection_ht) {
+				wpa_s->connection_channel_bandwidth = (ap_operation_chan_width
+					== CHAN_WIDTH_40) ? CHAN_WIDTH_40 : CHAN_WIDTH_20;
+			} else {
+				wpa_s->connection_channel_bandwidth = CHAN_WIDTH_20;
+			}
 		}
 	}
 
@@ -2988,6 +3022,52 @@ static int wpa_supplicant_event_associnfo(struct wpa_supplicant *wpa_s,
 		wpa_sm_set_assoc_wpa_ie(wpa_s->wpa, NULL, 0);
 	if (!found_x && data->assoc_info.req_ies)
 		wpa_sm_set_assoc_rsnxe(wpa_s->wpa, NULL, 0);
+
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	/* The WPA/RSN IE has been updated at this point. Since the Firmware could have roamed
+	 * to a different security type, update the current supplicant configuration to use the AKM
+	 * and pairwise suites from the assoc IE passed by the driver.
+	 */
+	if (wpas_driver_bss_selection(wpa_s)) {
+		if (!(wpa_sm_parse_own_wpa_ie(wpa_s->wpa, &ie) < 0)) {
+			/* Check if firmware has roamed to a different security network */
+			if(wpa_s->key_mgmt != ie.key_mgmt) {
+				wpa_dbg(wpa_s, MSG_DEBUG, "Update to AKM suite 0x%x from Assoc IE",
+					ie.key_mgmt);
+				wpa_s->key_mgmt = ie.key_mgmt;
+				wpa_sm_set_param(wpa_s->wpa, WPA_PARAM_KEY_MGMT, wpa_s->key_mgmt);
+
+				if (wpa_key_mgmt_wpa_psk_no_sae(wpa_s->key_mgmt)) {
+					/* Restore PMK as it can get overwritten if the previous
+					* association was to 802.1X.
+					*/
+					if ((!(wpa_s->drv_flags &
+					    WPA_DRIVER_FLAGS_4WAY_HANDSHAKE_PSK)) &&
+					    (wpa_s->current_ssid) &&
+					    (wpa_s->current_ssid->psk_set)) {
+						if (wpa_drv_get_bssid(wpa_s, bssid) < 0) {
+							wpa_dbg(wpa_s, MSG_ERROR, "Failed to get "
+								"BSSID");
+							wpa_supplicant_deauthenticate(
+								wpa_s, WLAN_REASON_DEAUTH_LEAVING);
+							return -1;
+						}
+						wpa_sm_set_pmk(wpa_s->wpa, wpa_s->current_ssid->psk,
+							PMK_LEN, NULL, bssid);
+					}
+				}
+			}
+			if(wpa_s->pairwise_cipher != ie.pairwise_cipher) {
+				wpa_dbg(wpa_s, MSG_DEBUG, "Update to pairwise cipher suite 0x%x "
+					"from Assoc IE", ie.pairwise_cipher);
+				wpa_s->pairwise_cipher = ie.pairwise_cipher;
+				wpa_sm_set_param(wpa_s->wpa, WPA_PARAM_PAIRWISE,
+					wpa_s->pairwise_cipher);
+			}
+			// TODO: Notify the framework about security type change b/230766005
+		}
+	}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 #ifdef CONFIG_FILS
 #ifdef CONFIG_SME
@@ -3101,6 +3181,15 @@ no_pfs:
 		p += len;
 	}
 #endif /* CONFIG_SME */
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	if (((wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK) ||
+		(wpa_s->key_mgmt == WPA_KEY_MGMT_FT_IEEE8021X) ||
+		(wpa_s->key_mgmt == WPA_KEY_MGMT_FT_SAE) ||
+		(wpa_s->key_mgmt == WPA_KEY_MGMT_FT_IEEE8021X_SHA384)) &&
+		wpa_ft_is_completed(wpa_s->wpa)) {
+		return 0;
+	}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 	/* Process FT when SME is in the driver */
 	if (!(wpa_s->drv_flags & WPA_DRIVER_FLAGS_SME) &&
@@ -3263,6 +3352,9 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 #if defined(CONFIG_FILS) || defined(CONFIG_MBO)
 	struct wpa_bss *bss;
 #endif /* CONFIG_FILS || CONFIG_MBO */
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	struct wpa_ie_data ie;
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 #ifdef CONFIG_AP
 	if (wpa_s->ap_iface) {
@@ -3279,6 +3371,27 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 
 	eloop_cancel_timeout(wpas_network_reenabled, wpa_s, NULL);
 	wpa_s->own_reconnect_req = 0;
+
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	if (!(wpa_sm_parse_own_wpa_ie(wpa_s->wpa, &ie) < 0)) {
+		struct wpa_ft_ies parse;
+		/* Check for FT reassociation is done by the driver */
+#ifdef CONFIG_IEEE80211R
+		int use_sha384 = wpa_key_mgmt_sha384(wpa_s->wpa->key_mgmt);
+		if (wpa_key_mgmt_ft(wpa_s->key_mgmt) && (wpa_s->key_mgmt == ie.key_mgmt)) {
+			if (wpa_ft_parse_ies(data->assoc_info.resp_ies,
+				data->assoc_info.resp_ies_len, &parse, use_sha384) < 0) {
+				wpa_printf(MSG_DEBUG, "Failed to parse FT IEs");
+				return;
+			}
+			if (parse.rsn_pmkid != NULL) {
+				wpa_set_ft_completed(wpa_s->wpa);
+				wpa_dbg(wpa_s, MSG_DEBUG, "Assume FT reassoc completed by the driver");
+			}
+		}
+#endif  /* CONFIG_IEEE80211R */
+	}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 	ft_completed = wpa_ft_is_completed(wpa_s->wpa);
 	if (data && wpa_supplicant_event_associnfo(wpa_s, data) < 0)
@@ -3298,6 +3411,15 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		return;
 	}
 
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	/* For driver based roaming, insert PSK during the initial association */
+	if (is_zero_ether_addr(wpa_s->bssid) &&
+		wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt)) {
+		/* In case the driver wants to handle re-assocs, pass it down the PMK. */
+		wpa_dbg(wpa_s, MSG_DEBUG, "Pass the PMK to the driver");
+		wpa_sm_install_pmk(wpa_s->wpa);
+	}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 	wpa_supplicant_set_state(wpa_s, WPA_ASSOCIATED);
 	if (os_memcmp(bssid, wpa_s->bssid, ETH_ALEN) != 0) {
 		if (os_reltime_initialized(&wpa_s->session_start)) {
@@ -3434,7 +3556,20 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		 */
 		eapol_sm_notify_portValid(wpa_s->eapol, true);
 	}
-
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	if (ft_completed && wpa_key_mgmt_ft(wpa_s->key_mgmt)) {
+		if (wpa_drv_get_bssid(wpa_s, bssid) < 0) {
+			wpa_dbg(wpa_s, MSG_ERROR, "Failed to get BSSID, key_mgmt: 0x%0x",
+				wpa_s->key_mgmt);
+			wpa_supplicant_deauthenticate(
+				wpa_s, WLAN_REASON_DEAUTH_LEAVING);
+			return;
+		}
+		os_memcpy(wpa_s->bssid, bssid, ETH_ALEN);
+		wpa_s->assoc_freq = data->assoc_info.freq;
+		wpa_sm_notify_brcm_ft_reassoc(wpa_s->wpa, bssid);
+	}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 	wpa_s->last_eapol_matches_bssid = 0;
 
 #ifdef CONFIG_TESTING_OPTIONS
@@ -4729,7 +4864,8 @@ static void wpas_event_assoc_reject(struct wpa_supplicant *wpa_s,
 			" qca_driver_reason=" : "",
 			connect_fail_reason(data->assoc_reject.reason_code));
 	wpa_s->assoc_status_code = data->assoc_reject.status_code;
-	wpas_notify_assoc_status_code(wpa_s);
+	wpas_notify_assoc_status_code(wpa_s, bssid, data->assoc_reject.timed_out,
+				    data->assoc_reject.resp_ies, data->assoc_reject.resp_ies_len);
 
 #ifdef CONFIG_OWE
 	if (data->assoc_reject.status_code ==
@@ -5209,6 +5345,10 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 		if (event == EVENT_CH_SWITCH_STARTED)
 			break;
 
+		if (wpa_s->assoc_freq && data->ch_switch.freq &&
+			    (int) wpa_s->assoc_freq != data->ch_switch.freq) {
+			wpas_notify_frequency_changed(wpa_s, data->ch_switch.freq);
+		}
 		wpa_s->assoc_freq = data->ch_switch.freq;
 		wpa_s->current_ssid->frequency = data->ch_switch.freq;
 		if (wpa_s->current_bss &&

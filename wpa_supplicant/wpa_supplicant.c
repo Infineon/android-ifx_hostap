@@ -224,6 +224,7 @@ static void wpa_supplicant_timeout(void *eloop_ctx, void *timeout_ctx)
 	wpa_msg(wpa_s, MSG_INFO, "Authentication with " MACSTR " timed out.",
 		MAC2STR(bssid));
 	wpa_bssid_ignore_add(wpa_s, bssid);
+	wpas_notify_auth_timeout(wpa_s);
 	wpa_sm_notify_disassoc(wpa_s->wpa);
 	wpa_supplicant_deauthenticate(wpa_s, WLAN_REASON_DEAUTH_LEAVING);
 	wpa_s->reassociate = 1;
@@ -1023,6 +1024,9 @@ void wpa_supplicant_set_state(struct wpa_supplicant *wpa_s,
 		if (ssid && (ssid->key_mgmt & WPA_KEY_MGMT_OWE))
 			wpas_update_owe_connect_params(wpa_s);
 #endif /* CONFIG_OWE */
+#ifdef CONFIG_HS20
+		hs20_configure_frame_filters(wpa_s);
+#endif
 	} else if (state == WPA_DISCONNECTED || state == WPA_ASSOCIATING ||
 		   state == WPA_ASSOCIATED) {
 		wpa_s->new_connection = 1;
@@ -1680,6 +1684,16 @@ int wpa_supplicant_set_suites(struct wpa_supplicant *wpa_s,
 	sae_pwe = wpa_s->conf->sae_pwe;
 	if (ssid->sae_password_id && sae_pwe != 3)
 		sae_pwe = 1;
+	if (bss && is_6ghz_freq(bss->freq)) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "WPA: force hash-to-element mode for 6GHz BSS.");
+		sae_pwe = 1;
+	}
+#ifdef CONFIG_TESTING_OPTIONS
+	if (wpa_s->force_hunting_and_pecking_pwe) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "WPA: force hunting and pecking mode.");
+		sae_pwe = 0;
+	}
+#endif
 	wpa_sm_set_param(wpa_s->wpa, WPA_PARAM_SAE_PWE, sae_pwe);
 #ifdef CONFIG_SAE_PK
 	wpa_sm_set_param(wpa_s->wpa, WPA_PARAM_SAE_PK,
@@ -1876,6 +1890,15 @@ int wpa_supplicant_set_suites(struct wpa_supplicant *wpa_s,
 		wpa_s->deny_ptk0_rekey = 0;
 		wpa_sm_set_param(wpa_s->wpa, WPA_PARAM_DENY_PTK0_REKEY, 0);
 	}
+
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	if ((wpa_s->key_mgmt & WPA_KEY_MGMT_CROSS_AKM_ROAM) &&
+	    IS_CROSS_AKM_ROAM_KEY_MGMT(ssid->key_mgmt)) {
+		wpa_s->key_mgmt = WPA_KEY_MGMT_SAE | WPA_KEY_MGMT_PSK;
+		wpa_dbg(wpa_s, MSG_INFO,
+			"WPA: Updating to KEY_MGMT SAE+PSK for seamless roaming");
+	}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 	return 0;
 }
@@ -3159,7 +3182,11 @@ static u8 * wpas_populate_assoc_ies(
 	}
 
 #ifdef CONFIG_HS20
-	if (is_hs20_network(wpa_s, ssid, bss)) {
+	if (is_hs20_network(wpa_s, ssid, bss)
+#ifndef ANDROID /* Android does not use the native HS 2.0 config */
+			&& is_hs20_config(wpa_s)
+#endif /* ANDROID */
+	) {
 		struct wpabuf *hs20;
 
 		hs20 = wpabuf_alloc(20 + MAX_ROAMING_CONS_OI_LEN);
@@ -3177,10 +3204,9 @@ static u8 * wpas_populate_assoc_ies(
 				wpa_ie_len += wpabuf_len(hs20);
 			}
 			wpabuf_free(hs20);
-
-			hs20_configure_frame_filters(wpa_s);
 		}
 	}
+	hs20_configure_frame_filters(wpa_s);
 #endif /* CONFIG_HS20 */
 
 	if (wpa_s->vendor_elem[VENDOR_ELEM_ASSOC_REQ]) {
@@ -3887,7 +3913,12 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 #endif /* CONFIG_WEP */
 
 	if ((wpa_s->drv_flags & WPA_DRIVER_FLAGS_4WAY_HANDSHAKE_PSK) &&
-	    (params.key_mgmt_suite == WPA_KEY_MGMT_PSK ||
+	    (
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+	     (params.key_mgmt_suite & WPA_KEY_MGMT_PSK) ||
+#else
+	     params.key_mgmt_suite == WPA_KEY_MGMT_PSK ||
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 	     params.key_mgmt_suite == WPA_KEY_MGMT_FT_PSK)) {
 		params.passphrase = ssid->passphrase;
 		if (ssid->psk_set)
@@ -3912,7 +3943,12 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 		else
 			params.req_key_mgmt_offload = 1;
 
-		if ((params.key_mgmt_suite == WPA_KEY_MGMT_PSK ||
+		if ((
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+		     (params.key_mgmt_suite & WPA_KEY_MGMT_PSK) ||
+#else
+		     params.key_mgmt_suite == WPA_KEY_MGMT_PSK ||
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 		     params.key_mgmt_suite == WPA_KEY_MGMT_PSK_SHA256 ||
 		     params.key_mgmt_suite == WPA_KEY_MGMT_FT_PSK) &&
 		    ssid->psk_set)
@@ -4008,6 +4044,8 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 			 * succeed.
 			 */
 			wpas_connection_failed(wpa_s, wpa_s->pending_bssid);
+			wpa_s->assoc_status_code = WLAN_STATUS_UNSPECIFIED_FAILURE;
+			wpas_notify_assoc_status_code(wpa_s, wpa_s->pending_bssid, 0, NULL, 0);
 			wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
 			os_memset(wpa_s->pending_bssid, 0, ETH_ALEN);
 			return;
@@ -6910,7 +6948,7 @@ static void wpa_supplicant_deinit_iface(struct wpa_supplicant *wpa_s,
 	struct wpa_global *global = wpa_s->global;
 	struct wpa_supplicant *iface, *prev;
 
-	if (wpa_s == wpa_s->parent)
+	if (wpa_s == wpa_s->parent || (wpa_s == wpa_s->p2pdev && wpa_s->p2p_mgmt))
 		wpas_p2p_group_remove(wpa_s, "*");
 
 	iface = global->ifaces;
@@ -7118,13 +7156,15 @@ struct wpa_supplicant * wpa_supplicant_add_iface(struct wpa_global *global,
 		return NULL;
 	}
 
-	if (iface->p2p_mgmt == 0) {
-		/* Notify the control interfaces about new iface */
-		if (wpas_notify_iface_added(wpa_s)) {
-			wpa_supplicant_deinit_iface(wpa_s, 1, 0);
-			return NULL;
-		}
+	/* Notify the control interfaces about new iface */
+	if (wpas_notify_iface_added(wpa_s)) {
+		wpa_supplicant_deinit_iface(wpa_s, 1, 0);
+		return NULL;
+	}
 
+	/* Notify the control interfaces about new networks for non p2p mgmt
+	 * ifaces. */
+	if (iface->p2p_mgmt == 0) {
 		for (ssid = wpa_s->conf->ssid; ssid; ssid = ssid->next)
 			wpas_notify_network_added(wpa_s, ssid);
 	}
@@ -7680,6 +7720,11 @@ void wpas_connection_failed(struct wpa_supplicant *wpa_s, const u8 *bssid)
 			"disconnected state");
 		return;
 	}
+	if (wpa_s->auto_reconnect_disabled) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "Ignore connection failure "
+			"indication since auto connect is disabled");
+		return;
+	}
 
 	/*
 	 * Add the failed BSSID into the ignore list and speed up next scan
@@ -7830,24 +7875,59 @@ int wpas_driver_bss_selection(struct wpa_supplicant *wpa_s)
 }
 
 
-#if defined(CONFIG_CTRL_IFACE) || defined(CONFIG_CTRL_IFACE_DBUS_NEW)
+#if defined(CONFIG_CTRL_IFACE) || defined(CONFIG_CTRL_IFACE_DBUS_NEW) || defined (CONFIG_CTRL_IFACE_AIDL)
 int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 					      struct wpa_ssid *ssid,
 					      const char *field,
 					      const char *value)
 {
 #ifdef IEEE8021X_EAPOL
-	struct eap_peer_config *eap = &ssid->eap;
+	enum wpa_ctrl_req_type rtype;
 
 	wpa_printf(MSG_DEBUG, "CTRL_IFACE: response handle field=%s", field);
 	wpa_hexdump_ascii_key(MSG_DEBUG, "CTRL_IFACE: response value",
 			      (const u8 *) value, os_strlen(value));
 
-	switch (wpa_supplicant_ctrl_req_from_string(field)) {
+	rtype = wpa_supplicant_ctrl_req_from_string(field);
+	return wpa_supplicant_ctrl_rsp_handle(wpa_s, ssid, rtype, value, strlen(value));
+#else /* IEEE8021X_EAPOL */
+	wpa_printf(MSG_DEBUG, "CTRL_IFACE: IEEE 802.1X not included");
+	return -1;
+#endif /* IEEE8021X_EAPOL */
+}
+
+int wpa_supplicant_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
+				   struct wpa_ssid *ssid,
+				   enum wpa_ctrl_req_type rtype,
+				   const char *value, int value_len)
+{
+#ifdef IEEE8021X_EAPOL
+	struct eap_peer_config *eap = &ssid->eap;
+	char *identity, *imsi_identity;
+
+	switch (rtype) {
 	case WPA_CTRL_REQ_EAP_IDENTITY:
 		os_free(eap->identity);
-		eap->identity = (u8 *) os_strdup(value);
-		eap->identity_len = os_strlen(value);
+		os_free(eap->imsi_identity);
+		if (value == NULL)
+			return -1;
+		identity = os_strchr(value, ':');
+		if (identity == NULL) {
+			/* plain identity */
+			eap->identity = (u8 *)os_strdup(value);
+			eap->identity_len = os_strlen(value);
+		} else {
+			/* have both plain identity and encrypted identity */
+			imsi_identity = value;
+			*identity++ = '\0';
+			/* plain identity */
+			eap->imsi_identity = (u8 *)dup_binstr(imsi_identity, strlen(imsi_identity));
+			eap->imsi_identity_len = strlen(imsi_identity);
+			/* encrypted identity */
+			eap->identity = (u8 *)dup_binstr(identity,
+							 value_len - strlen(imsi_identity) - 1);
+			eap->identity_len = value_len - strlen(imsi_identity) - 1;
+		}
 		eap->pending_req_identity = 0;
 		if (ssid == wpa_s->current_ssid)
 			wpa_s->reassociate = 1;
@@ -7855,7 +7935,7 @@ int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 	case WPA_CTRL_REQ_EAP_PASSWORD:
 		bin_clear_free(eap->password, eap->password_len);
 		eap->password = (u8 *) os_strdup(value);
-		eap->password_len = os_strlen(value);
+		eap->password_len = value_len;
 		eap->pending_req_password = 0;
 		if (ssid == wpa_s->current_ssid)
 			wpa_s->reassociate = 1;
@@ -7863,7 +7943,7 @@ int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 	case WPA_CTRL_REQ_EAP_NEW_PASSWORD:
 		bin_clear_free(eap->new_password, eap->new_password_len);
 		eap->new_password = (u8 *) os_strdup(value);
-		eap->new_password_len = os_strlen(value);
+		eap->new_password_len = value_len;
 		eap->pending_req_new_password = 0;
 		if (ssid == wpa_s->current_ssid)
 			wpa_s->reassociate = 1;
@@ -7878,7 +7958,7 @@ int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 	case WPA_CTRL_REQ_EAP_OTP:
 		bin_clear_free(eap->otp, eap->otp_len);
 		eap->otp = (u8 *) os_strdup(value);
-		eap->otp_len = os_strlen(value);
+		eap->otp_len = value_len;
 		os_free(eap->pending_req_otp);
 		eap->pending_req_otp = NULL;
 		eap->pending_req_otp_len = 0;
@@ -7915,7 +7995,7 @@ int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 			return -1;
 		break;
 	default:
-		wpa_printf(MSG_DEBUG, "CTRL_IFACE: Unknown field '%s'", field);
+		wpa_printf(MSG_DEBUG, "CTRL_IFACE: Unknown type %d", rtype);
 		return -1;
 	}
 
@@ -7925,7 +8005,7 @@ int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 	return -1;
 #endif /* IEEE8021X_EAPOL */
 }
-#endif /* CONFIG_CTRL_IFACE || CONFIG_CTRL_IFACE_DBUS_NEW */
+#endif /* CONFIG_CTRL_IFACE || CONFIG_CTRL_IFACE_DBUS_NEW || CONFIG_CTRL_IFACE_AIDL */
 
 
 int wpas_network_disabled(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid)
@@ -8084,6 +8164,17 @@ void wpas_auth_failed(struct wpa_supplicant *wpa_s, char *reason)
 		"id=%d ssid=\"%s\" auth_failures=%u duration=%d reason=%s",
 		ssid->id, wpa_ssid_txt(ssid->ssid, ssid->ssid_len),
 		ssid->auth_failures, dur, reason);
+
+	char *format_str = "id=%d ssid=\"%s\" auth_failures=%u duration=%d reason=%s";
+	int msg_len = snprintf(NULL, 0, format_str,
+		ssid->id, wpa_ssid_txt(ssid->ssid, ssid->ssid_len),
+		ssid->auth_failures, dur, reason) + 1;
+	char *msg = os_malloc(msg_len);
+	snprintf(msg, msg_len, format_str,
+		ssid->id, wpa_ssid_txt(ssid->ssid, ssid->ssid_len),
+		ssid->auth_failures, dur, reason);
+	wpas_notify_ssid_temp_disabled(wpa_s, msg);
+	os_free(msg);
 }
 
 
@@ -8335,7 +8426,7 @@ void wpas_vendor_elem_update(struct wpa_supplicant *wpa_s)
 	}
 
 #ifdef CONFIG_P2P
-	if (wpa_s->parent == wpa_s &&
+	if ((wpa_s->parent == wpa_s || (wpa_s == wpa_s->p2pdev && wpa_s->p2p_mgmt)) &&
 	    wpa_s->global->p2p &&
 	    !wpa_s->global->p2p_disabled)
 		p2p_set_vendor_elems(wpa_s->global->p2p, wpa_s->vendor_elem);

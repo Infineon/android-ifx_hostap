@@ -12,9 +12,11 @@
 #include <sys/wait.h>
 
 #ifdef ANDROID
+#include <grp.h>
+#include <pwd.h>
 #include <sys/capability.h>
 #include <sys/prctl.h>
-#include <private/android_filesystem_config.h>
+#include <sys/types.h>
 #endif /* ANDROID */
 
 #ifdef __MACH__
@@ -340,24 +342,48 @@ int os_program_init(void)
 	unsigned int seed;
 
 #ifdef ANDROID
+	struct __user_cap_header_struct header;
+	struct __user_cap_data_struct cap;
+	struct group *grp = getgrnam("wifi");
+	gid_t gid_wifi = grp ? grp->gr_gid : 0;
+	struct passwd *pwd = getpwnam("wifi");
+	uid_t uid_wifi = pwd ? pwd->pw_uid : 0;
+
 	/*
 	 * We ignore errors here since errors are normal if we
 	 * are already running as non-root.
 	 */
 #ifdef ANDROID_SETGROUPS_OVERRIDE
 	gid_t groups[] = { ANDROID_SETGROUPS_OVERRIDE };
-#else /* ANDROID_SETGROUPS_OVERRIDE */
-	gid_t groups[] = { AID_INET, AID_WIFI, AID_KEYSTORE };
-#endif /* ANDROID_SETGROUPS_OVERRIDE */
-	struct __user_cap_header_struct header;
-	struct __user_cap_data_struct cap;
 
+	if (!gid_wifi || !uid_wifi) return -1;
 	setgroups(ARRAY_SIZE(groups), groups);
+#else /* ANDROID_SETGROUPS_OVERRIDE */
+	gid_t groups[4];
+	int group_idx = 0;
+
+	if (!gid_wifi || !uid_wifi) return -1;
+	groups[group_idx] = gid_wifi;
+
+	grp = getgrnam("inet");
+	groups[++group_idx] = grp ? grp->gr_gid : 0;
+	if (!groups[group_idx]) return -1;
+
+	grp = getgrnam("keystore");
+	groups[++group_idx] = grp ? grp->gr_gid : 0;
+	if (!groups[group_idx]) return -1;
+
+	grp = getgrnam("log");
+	groups[++group_idx] = grp ? grp->gr_gid : 0;
+	if (!groups[group_idx]) group_idx--;
+
+	setgroups(group_idx + 1, groups);
+#endif /* ANDROID_SETGROUPS_OVERRIDE */
 
 	prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
 
-	setgid(AID_WIFI);
-	setuid(AID_WIFI);
+	setgid(gid_wifi);
+	setuid(uid_wifi);
 
 	header.version = _LINUX_CAPABILITY_VERSION;
 	header.pid = 0;

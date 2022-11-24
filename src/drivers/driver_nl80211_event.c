@@ -20,7 +20,6 @@
 #include "common/ieee802_11_common.h"
 #include "driver_nl80211.h"
 
-
 static void
 nl80211_control_port_frame_tx_status(struct wpa_driver_nl80211_data *drv,
 				     const u8 *frame, size_t len,
@@ -1866,7 +1865,6 @@ static void nl80211_spurious_frame(struct i802_bss *bss, struct nlattr **tb,
 
 	wpa_supplicant_event(drv->ctx, EVENT_RX_FROM_UNKNOWN, &event);
 }
-
 
 #ifdef CONFIG_DRIVER_NL80211_QCA
 

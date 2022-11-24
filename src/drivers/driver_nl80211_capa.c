@@ -19,7 +19,6 @@
 #include "common/brcm_vendor.h"
 #include "driver_nl80211.h"
 
-
 static int protocol_feature_handler(struct nl_msg *msg, void *arg)
 {
 	u32 *feat = arg;
@@ -1027,14 +1026,20 @@ static int wiphy_info_handler(struct nl_msg *msg, void *arg)
 				case BRCM_VENDOR_SCMD_ACS:
 					drv->capa.flags |=
 						WPA_DRIVER_FLAGS_ACS_OFFLOAD;
+				    drv->capa.flags |=
+						WPA_DRIVER_FLAGS_SUPPORT_HW_MODE_ANY;
 					wpa_printf(MSG_DEBUG,
 						   "Enabled BRCM ACS");
 					drv->brcm_do_acs = 1;
 					break;
+				case BRCM_VENDOR_SCMD_SET_PMK:
+					drv->vendor_set_pmk = 1;
+					break;
+				default:
+					break;
 				}
 #endif /* CONFIG_DRIVER_NL80211_BRCM */
 			}
-
 			wpa_printf(MSG_DEBUG, "nl80211: Supported vendor command: vendor_id=0x%x subcmd=%u",
 				   vinfo->vendor_id, vinfo->subcmd);
 		}

@@ -19,6 +19,8 @@
 #include "wps/wps_defs.h"
 #include "config_ssid.h"
 #include "wmm_ac.h"
+#include <netinet/in.h>
+#include <netinet/in6.h>
 
 extern const char *const wpa_supplicant_version;
 extern const char *const wpa_supplicant_license;
@@ -48,7 +50,7 @@ struct wpa_cred;
 struct ctrl_iface_priv;
 struct ctrl_iface_global_priv;
 struct wpas_dbus_priv;
-struct wpas_binder_priv;
+struct wpas_aidl_priv;
 
 /**
  * struct wpa_interface - Parameters for wpa_supplicant_add_iface()
@@ -281,7 +283,7 @@ struct wpa_global {
 	struct wpa_params params;
 	struct ctrl_iface_global_priv *ctrl_iface;
 	struct wpas_dbus_priv *dbus;
-	struct wpas_binder_priv *binder;
+	struct wpas_aidl_priv *aidl;
 	void **drv_priv;
 	size_t drv_count;
 	struct os_time suspend_time;
@@ -308,6 +310,7 @@ struct wpa_global {
 	unsigned int p2p_24ghz_social_channels:1;
 	unsigned int pending_p2ps_group:1;
 	unsigned int pending_group_iface_for_p2ps:1;
+	unsigned int p2p_go_found_external_scan:1;
 	unsigned int pending_p2ps_group_freq;
 
 #ifdef CONFIG_WIFI_DISPLAY
@@ -678,6 +681,21 @@ struct active_scs_elem {
 	enum scs_response_status status;
 };
 
+struct dscp_policy_data {
+	u8 policy_id;
+	u8 req_type;
+	u8 dscp;
+	bool dscp_info;
+	const u8 *frame_classifier;
+	u8 frame_classifier_len;
+	struct type4_params type4_param;
+	const u8 *domain_name;
+	u8 domain_name_len;
+	u16 start_port;
+	u16 end_port;
+	bool port_range_info;
+};
+
 
 /**
  * struct wpa_supplicant - Internal data for wpa_supplicant interface
@@ -713,9 +731,9 @@ struct wpa_supplicant {
 	char *preq_notify_peer;
 #endif /* CONFIG_AP */
 #endif /* CONFIG_CTRL_IFACE_DBUS_NEW */
-#ifdef CONFIG_CTRL_IFACE_BINDER
-	const void *binder_object_key;
-#endif /* CONFIG_CTRL_IFACE_BINDER */
+#ifdef CONFIG_CTRL_IFACE_AIDL
+	const void *aidl_object_key;
+#endif /* CONFIG_CTRL_IFACE_AIDL */
 	char bridge_ifname[16];
 
 	char *confname;
@@ -958,7 +976,11 @@ struct wpa_supplicant {
 	unsigned int connection_ht:1;
 	unsigned int connection_vht:1;
 	unsigned int connection_he:1;
+	unsigned int connection_max_nss_rx:4;
+	unsigned int connection_max_nss_tx:4;
+	unsigned int connection_channel_bandwidth:5;
 	unsigned int disable_mbo_oce:1;
+	unsigned int connection_11b_only:1;
 
 	struct os_reltime last_mac_addr_change;
 	int last_mac_addr_style;
@@ -1293,7 +1315,11 @@ struct wpa_supplicant {
 	u8 coloc_intf_timeout;
 #ifdef CONFIG_MBO
 	unsigned int wnm_mbo_trans_reason_present:1;
+	unsigned int wnm_mbo_cell_pref_present:1;
+	unsigned int wnm_mbo_assoc_retry_delay_present:1;
 	u8 wnm_mbo_transition_reason;
+	u8 wnm_mbo_cell_preference;
+	u16 wnm_mbo_assoc_retry_delay_sec;
 #endif /* CONFIG_MBO */
 #endif /* CONFIG_WNM */
 
@@ -1341,6 +1367,7 @@ struct wpa_supplicant {
 	unsigned int oci_freq_override_ft_assoc;
 	unsigned int oci_freq_override_fils_assoc;
 	unsigned int oci_freq_override_wnm_sleep;
+	int force_hunting_and_pecking_pwe;
 #endif /* CONFIG_TESTING_OPTIONS */
 
 	struct wmm_ac_assoc_data *wmm_ac_assoc_info;
@@ -1733,6 +1760,20 @@ int wpa_supplicant_ctrl_iface_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
 					      struct wpa_ssid *ssid,
 					      const char *field,
 					      const char *value);
+/**
+ * wpa_supplicant_ctrl_rsp_handle - Handle a control response
+ * @wpa_s: Pointer to wpa_supplicant data
+ * @ssid: Pointer to the network block the reply is for
+ * @field: field the response is a reply for
+ * @value: value (ie, password, etc) for @field
+ * Returns: 0 on success, non-zero on error
+ *
+ * Helper function to handle replies to control interface requests.
+ */
+int wpa_supplicant_ctrl_rsp_handle(struct wpa_supplicant *wpa_s,
+				   struct wpa_ssid *ssid,
+				   enum wpa_ctrl_req_type rtype,
+				   const char *value, int len);
 
 void ibss_mesh_setup_freq(struct wpa_supplicant *wpa_s,
 			  const struct wpa_ssid *ssid,
@@ -1768,7 +1809,6 @@ static inline int network_is_persistent_group(struct wpa_ssid *ssid)
 {
 	return ssid->disabled == 2 && ssid->p2p_persistent_group;
 }
-
 
 static inline int wpas_mode_to_ieee80211_mode(enum wpas_mode mode)
 {
@@ -1885,6 +1925,7 @@ int wpas_pasn_auth_tx_status(struct wpa_supplicant *wpa_s,
 			     const u8 *data, size_t data_len, u8 acked);
 int wpas_pasn_auth_rx(struct wpa_supplicant *wpa_s,
 		      const struct ieee80211_mgmt *mgmt, size_t len);
+int disabled_freq(struct wpa_supplicant *wpa_s, int freq);
 
 int wpas_pasn_deauthenticate(struct wpa_supplicant *wpa_s, const u8 *bssid);
 

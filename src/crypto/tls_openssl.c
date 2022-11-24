@@ -132,32 +132,55 @@ static const unsigned char * ASN1_STRING_get0_data(const ASN1_STRING *x)
 #include <openssl/pem.h>
 #include <keystore/keystore_get.h>
 
-static BIO * BIO_from_keystore(const char *key)
+#include <log/log.h>
+#include <log/log_event_list.h>
+
+#define CERT_VALIDATION_FAILURE 210033
+#define ANDROID_KEYSTORE_PREFIX "keystore://"
+#define ANDROID_KEYSTORE_PREFIX_LEN os_strlen(ANDROID_KEYSTORE_PREFIX)
+#define ANDROID_KEYSTORE_ENCODED_PREFIX "keystores://"
+#define ANDROID_KEYSTORE_ENCODED_PREFIX_LEN os_strlen(ANDROID_KEYSTORE_ENCODED_PREFIX)
+
+static void log_cert_validation_failure(const char *reason)
+{
+	android_log_context ctx = create_android_logger(CERT_VALIDATION_FAILURE);
+	android_log_write_string8(ctx, reason);
+	android_log_write_list(ctx, LOG_ID_SECURITY);
+	android_log_destroy(&ctx);
+}
+
+
+static BIO* BIO_from_keystore(const char *alias)
 {
 	BIO *bio = NULL;
 	uint8_t *value = NULL;
-	int length = keystore_get(key, strlen(key), &value);
+	int length = keystore_get(alias, strlen(alias), &value);
 	if (length != -1 && (bio = BIO_new(BIO_s_mem())) != NULL)
 		BIO_write(bio, value, length);
 	free(value);
 	return bio;
 }
 
-
-static int tls_add_ca_from_keystore(X509_STORE *ctx, const char *key_alias)
+static int tls_add_ca_from_keystore(X509_STORE *ctx, const char *alias)
 {
-	BIO *bio = BIO_from_keystore(key_alias);
+	BIO *bio = BIO_from_keystore(alias);
 	STACK_OF(X509_INFO) *stack = NULL;
 	stack_index_t i;
+	int ret = 0;
 
-	if (bio) {
-		stack = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
-		BIO_free(bio);
+	if (!bio) {
+		wpa_printf(MSG_ERROR, "OpenSSL: Failed to parse certificate: %s",
+				alias);
+		return -1;
 	}
 
+	// Keystore returns X.509 certificates in PEM encoding
+	stack = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
+	BIO_free(bio);
+
 	if (!stack) {
-		wpa_printf(MSG_WARNING, "TLS: Failed to parse certificate: %s",
-			   key_alias);
+		wpa_printf(MSG_ERROR, "OpenSSL: Failed to parse certificate: %s",
+				alias);
 		return -1;
 	}
 
@@ -165,33 +188,37 @@ static int tls_add_ca_from_keystore(X509_STORE *ctx, const char *key_alias)
 		X509_INFO *info = sk_X509_INFO_value(stack, i);
 
 		if (info->x509)
-			X509_STORE_add_cert(ctx, info->x509);
+			if (!X509_STORE_add_cert(ctx, info->x509)) {
+				wpa_printf(MSG_ERROR,
+						"OpenSSL: Failed to add Root CA certificate");
+				ret = -1;
+				break;
+			}
 		if (info->crl)
 			X509_STORE_add_crl(ctx, info->crl);
 	}
 
 	sk_X509_INFO_pop_free(stack, X509_INFO_free);
-
-	return 0;
+	return ret;
 }
 
 
 static int tls_add_ca_from_keystore_encoded(X509_STORE *ctx,
-					    const char *encoded_key_alias)
+					    const char *encoded_alias)
 {
 	int rc = -1;
-	int len = os_strlen(encoded_key_alias);
+	int len = os_strlen(encoded_alias);
 	unsigned char *decoded_alias;
 
 	if (len & 1) {
 		wpa_printf(MSG_WARNING, "Invalid hex-encoded alias: %s",
-			   encoded_key_alias);
+			   encoded_alias);
 		return rc;
 	}
 
 	decoded_alias = os_malloc(len / 2 + 1);
 	if (decoded_alias) {
-		if (!hexstr2bin(encoded_key_alias, decoded_alias, len / 2)) {
+		if (!hexstr2bin(encoded_alias, decoded_alias, len / 2)) {
 			decoded_alias[len / 2] = '\0';
 			rc = tls_add_ca_from_keystore(
 				ctx, (const char *) decoded_alias);
@@ -2157,6 +2184,10 @@ static void openssl_tls_fail_event(struct tls_connection *conn,
 	struct wpabuf *cert = NULL;
 	struct tls_context *context = conn->context;
 
+#ifdef ANDROID
+	log_cert_validation_failure(err_str);
+#endif
+
 	if (context->event_cb == NULL)
 		return;
 
@@ -2739,17 +2770,20 @@ static int tls_connection_ca_cert(struct tls_data *data,
 
 #ifdef ANDROID
 	/* Single alias */
-	if (ca_cert && os_strncmp("keystore://", ca_cert, 11) == 0) {
+	if (ca_cert && os_strncmp(ANDROID_KEYSTORE_PREFIX, ca_cert,
+					ANDROID_KEYSTORE_PREFIX_LEN) == 0) {
 		if (tls_add_ca_from_keystore(SSL_CTX_get_cert_store(ssl_ctx),
-					     &ca_cert[11]) < 0)
+				&ca_cert[ANDROID_KEYSTORE_PREFIX_LEN]) < 0)
 			return -1;
 		SSL_set_verify(conn->ssl, SSL_VERIFY_PEER, tls_verify_cb);
 		return 0;
 	}
 
 	/* Multiple aliases separated by space */
-	if (ca_cert && os_strncmp("keystores://", ca_cert, 12) == 0) {
-		char *aliases = os_strdup(&ca_cert[12]);
+	if (ca_cert && os_strncmp(ANDROID_KEYSTORE_ENCODED_PREFIX, ca_cert,
+					ANDROID_KEYSTORE_ENCODED_PREFIX_LEN) == 0) {
+		char *aliases = os_strdup(
+				&ca_cert[ANDROID_KEYSTORE_ENCODED_PREFIX_LEN]);
 		const char *delim = " ";
 		int rc = 0;
 		char *savedptr;
@@ -2760,10 +2794,10 @@ static int tls_connection_ca_cert(struct tls_data *data,
 		alias = strtok_r(aliases, delim, &savedptr);
 		for (; alias; alias = strtok_r(NULL, delim, &savedptr)) {
 			if (tls_add_ca_from_keystore_encoded(
-				    SSL_CTX_get_cert_store(ssl_ctx), alias)) {
-				wpa_printf(MSG_WARNING,
-					   "OpenSSL: %s - Failed to add ca_cert %s from keystore",
-					   __func__, alias);
+					SSL_CTX_get_cert_store(ssl_ctx), alias)) {
+				wpa_printf(MSG_ERROR,
+						"OpenSSL: Failed to add ca_cert %s from keystore",
+						alias);
 				rc = -1;
 				break;
 			}
@@ -3046,7 +3080,7 @@ static int tls_set_conn_flags(struct tls_connection *conn, unsigned int flags,
 #ifdef CONFIG_SUITEB
 #ifdef OPENSSL_IS_BORINGSSL
 	/* Start with defaults from BoringSSL */
-	SSL_CTX_set_verify_algorithm_prefs(conn->ssl_ctx, NULL, 0);
+	SSL_set_verify_algorithm_prefs(conn->ssl, NULL, 0);
 #endif /* OPENSSL_IS_BORINGSSL */
 #if OPENSSL_VERSION_NUMBER >= 0x10002000L
 	if (flags & TLS_CONN_SUITEB_NO_ECDH) {
@@ -3100,7 +3134,7 @@ static int tls_set_conn_flags(struct tls_connection *conn, unsigned int flags,
 #ifdef OPENSSL_IS_BORINGSSL
 		uint16_t sigalgs[1] = { SSL_SIGN_RSA_PKCS1_SHA384 };
 
-		if (SSL_CTX_set_verify_algorithm_prefs(conn->ssl_ctx, sigalgs,
+		if (SSL_set_verify_algorithm_prefs(conn->ssl, sigalgs,
 						       1) != 1) {
 			wpa_printf(MSG_INFO,
 				   "OpenSSL: Failed to set Suite B sigalgs");
@@ -3138,7 +3172,7 @@ static int tls_set_conn_flags(struct tls_connection *conn, unsigned int flags,
 			return -1;
 		}
 
-		if (SSL_CTX_set_verify_algorithm_prefs(conn->ssl_ctx, sigalgs,
+		if (SSL_set_verify_algorithm_prefs(conn->ssl, sigalgs,
 						       1) != 1) {
 			wpa_printf(MSG_INFO,
 				   "OpenSSL: Failed to set Suite B sigalgs");
@@ -3312,31 +3346,35 @@ static int tls_connection_client_cert(struct tls_connection *conn,
 		return -1;
 
 #ifdef ANDROID
-	if (os_strncmp("keystore://", client_cert, 11) == 0) {
-		BIO *bio = BIO_from_keystore(&client_cert[11]);
+	if (os_strncmp(ANDROID_KEYSTORE_PREFIX, client_cert,
+			ANDROID_KEYSTORE_PREFIX_LEN) == 0) {
+		BIO *bio = BIO_from_keystore(&client_cert[ANDROID_KEYSTORE_PREFIX_LEN]);
 		X509 *x509 = NULL;
-		int ret = -1;
-		if (bio) {
-			x509 = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+		if (!bio) {
+			return -1;
 		}
-		if (x509) {
-			if (SSL_use_certificate(conn->ssl, x509) == 1)
-				ret = 0;
+		// Keystore returns X.509 certificates in PEM encoding
+		x509 = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+		if (!x509 || SSL_use_certificate(conn->ssl, x509) != 1) {
 			X509_free(x509);
+			BIO_free(bio);
+			wpa_printf(MSG_ERROR, "OpenSSL: Unknown certificate encoding");
+			return -1;
 		}
+		X509_free(x509);
+		wpa_printf(MSG_DEBUG,
+				"OpenSSL: Found PEM encoded certificate from keystore: %s",
+				client_cert);
 
-		/* Read additional certificates into the chain. */
-		while (bio) {
-			x509 = PEM_read_bio_X509(bio, NULL, NULL, NULL);
-			if (x509) {
-				/* Takes ownership of x509 */
-				SSL_add0_chain_cert(conn->ssl, x509);
-			} else {
-				BIO_free(bio);
-				bio = NULL;
-			}
+		// Read additional certificates into the chain
+		while ((x509 = PEM_read_bio_X509(bio, NULL, NULL, NULL))) {
+			wpa_printf(MSG_DEBUG,
+					"OpenSSL: Added an additional certificate into the chain");
+			// Takes ownership of x509, no need to free it here
+			SSL_add0_chain_cert(conn->ssl, x509);
 		}
-		return ret;
+		BIO_free(bio);
+		return 0;
 	}
 #endif /* ANDROID */
 
@@ -5190,8 +5228,10 @@ int tls_connection_set_params(void *tls_ctx, struct tls_connection *conn,
 					     params->altsubject_match,
 					     params->suffix_match,
 					     params->domain_match,
-					     params->check_cert_subject))
+					     params->check_cert_subject)) {
+		wpa_printf(MSG_ERROR, "TLS: Failed to set subject match");
 		return -1;
+	}
 
 	if (engine_id && ca_cert_id) {
 		if (tls_connection_engine_ca_cert(data, conn, ca_cert_id))
@@ -5199,16 +5239,20 @@ int tls_connection_set_params(void *tls_ctx, struct tls_connection *conn,
 	} else if (tls_connection_ca_cert(data, conn, params->ca_cert,
 					  params->ca_cert_blob,
 					  params->ca_cert_blob_len,
-					  params->ca_path))
+					  params->ca_path)) {
+		wpa_printf(MSG_ERROR, "TLS: Failed to parse Root CA certificate");
 		return -1;
+	}
 
 	if (engine_id && cert_id) {
 		if (tls_connection_engine_client_cert(conn, cert_id))
 			return TLS_SET_PARAMS_ENGINE_PRV_VERIFY_FAILED;
 	} else if (tls_connection_client_cert(conn, params->client_cert,
 					      params->client_cert_blob,
-					      params->client_cert_blob_len))
+					      params->client_cert_blob_len)) {
+		wpa_printf(MSG_ERROR, "TLS: Failed to parse client certificate");
 		return -1;
+	}
 
 	if (engine_id && key_id) {
 		wpa_printf(MSG_DEBUG, "TLS: Using private key from engine");
@@ -5283,8 +5327,10 @@ int tls_connection_set_params(void *tls_ctx, struct tls_connection *conn,
 	}
 
 	if (tls_set_conn_flags(conn, params->flags,
-			       params->openssl_ciphers) < 0)
+			       params->openssl_ciphers) < 0) {
+		wpa_printf(MSG_ERROR, "TLS: Failed to set connection flags");
 		return -1;
+	}
 
 #ifdef OPENSSL_IS_BORINGSSL
 	if (params->flags & TLS_CONN_REQUEST_OCSP) {

@@ -2055,11 +2055,13 @@ dpp_conf_req_rx(struct dpp_authentication *auth, const u8 *attr_start,
 	}
 
 	token = json_get_member(root, "bandSupport");
+	auth->band_list_size = 0;
 	if (token && token->type == JSON_ARRAY) {
 		int *opclass = NULL;
 		char txt[200], *pos, *end;
 		int i, res;
 
+		memset(auth->band_list, 0, sizeof(auth->band_list));
 		wpa_printf(MSG_DEBUG, "DPP: bandSupport");
 		token = token->child;
 		while (token) {
@@ -2067,6 +2069,9 @@ dpp_conf_req_rx(struct dpp_authentication *auth, const u8 *attr_start,
 				wpa_printf(MSG_DEBUG,
 					   "DPP: Invalid bandSupport array member type");
 			} else {
+				if (auth->band_list_size < DPP_MAX_CHANNELS) {
+					auth->band_list[auth->band_list_size++] = token->number;
+				}
 				wpa_printf(MSG_DEBUG,
 					   "DPP: Supported global operating class: %d",
 					   token->number);

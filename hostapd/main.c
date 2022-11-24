@@ -30,7 +30,9 @@
 #include "config_file.h"
 #include "eap_register.h"
 #include "ctrl_iface.h"
-
+#ifdef CONFIG_CTRL_IFACE_AIDL
+#include "aidl.h"
+#endif /* CONFIG_CTRL_IFACE_AIDL */
 
 struct hapd_global {
 	void **drv_priv;
@@ -764,9 +766,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
+#ifndef CONFIG_CTRL_IFACE_AIDL
 	if (optind == argc && interfaces.global_iface_path == NULL &&
 	    num_bss_configs == 0)
 		usage();
+#endif
 
 	wpa_msg_register_ifname_cb(hostapd_msg_ifname_cb);
 
@@ -887,6 +891,12 @@ int main(int argc, char *argv[])
 			goto out;
 	}
 
+#ifdef CONFIG_CTRL_IFACE_AIDL
+	if (hostapd_aidl_init(&interfaces)) {
+		wpa_printf(MSG_ERROR, "Failed to initialize AIDL interface");
+		goto out;
+	}
+#endif /* CONFIG_CTRL_IFACE_AIDL */
 	hostapd_global_ctrl_iface_init(&interfaces);
 
 	if (hostapd_global_run(&interfaces, daemonize, pid_file)) {
@@ -897,6 +907,9 @@ int main(int argc, char *argv[])
 	ret = 0;
 
  out:
+#ifdef CONFIG_CTRL_IFACE_AIDL
+	hostapd_aidl_deinit(&interfaces);
+#endif /* CONFIG_CTRL_IFACE_AIDL */
 	hostapd_global_ctrl_iface_deinit(&interfaces);
 	/* Deinitialize all interfaces */
 	for (i = 0; i < interfaces.count; i++) {

@@ -611,6 +611,11 @@ CONFIG_DPP2=y
 # production use)
 #CONFIG_DPP3=y
 
+# WLAN Authentication and Privacy Infrastructure (WAPI): interface only.
+# Configure the building of the interface which allows WAPI configuration.
+# Note: does not configure WAPI implementation itself.
+#CONFIG_WAPI_INTERFACE=y
+
 # Wired equivalent privacy (WEP)
 # WEP is an obsolete cryptographic data confidentiality algorithm that is not
 # considered secure. It should not be used for anything anymore. The
@@ -633,3 +638,4 @@ CONFIG_DPP2=y
 # design is still subject to change. As such, this should not yet be enabled in
 # production use.
 #CONFIG_PASN=y
+

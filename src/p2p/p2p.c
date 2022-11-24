@@ -8,6 +8,7 @@
 
 #include "includes.h"
 
+#include <log/log.h>
 #include "common.h"
 #include "eloop.h"
 #include "common/defs.h"
@@ -455,8 +456,10 @@ static void p2p_copy_client_info(struct p2p_device *dev,
 	dev->info.config_methods = cli->config_methods;
 	os_memcpy(dev->info.pri_dev_type, cli->pri_dev_type, 8);
 	dev->info.wps_sec_dev_type_list_len = 8 * cli->num_sec_dev_types;
-	if (dev->info.wps_sec_dev_type_list_len > WPS_SEC_DEV_TYPE_MAX_LEN)
+	if (dev->info.wps_sec_dev_type_list_len > WPS_SEC_DEV_TYPE_MAX_LEN) {
+		android_errorWriteLog(0x534e4554, "172937525");
 		dev->info.wps_sec_dev_type_list_len = WPS_SEC_DEV_TYPE_MAX_LEN;
+	}
 	os_memcpy(dev->info.wps_sec_dev_type_list, cli->sec_dev_types,
 		  dev->info.wps_sec_dev_type_list_len);
 }
@@ -1796,7 +1799,12 @@ int p2p_go_params(struct p2p_data *p2p, struct p2p_go_neg_results *params)
 	}
 	p2p->ssid_set = 0;
 
-	p2p_random(params->passphrase, p2p->cfg->passphrase_len);
+	if (p2p->passphrase_set) {
+		os_memcpy(params->passphrase, p2p->passphrase, os_strlen(p2p->passphrase));
+	} else {
+		p2p_random(params->passphrase, p2p->cfg->passphrase_len);
+	}
+	p2p->passphrase_set = 0;
 	return 0;
 }
 

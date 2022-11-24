@@ -4423,6 +4423,7 @@ struct wpa_config * wpa_config_alloc_empty(const char *ctrl_interface,
 		DEFAULT_DISASSOC_IMMINENT_RSSI_THRESHOLD;
 	config->oce = DEFAULT_OCE_SUPPORT;
 #endif /* CONFIG_MBO */
+	config->btm_offload = DEFAULT_BTM_OFFLOAD;
 
 	if (ctrl_interface)
 		config->ctrl_interface = os_strdup(ctrl_interface);
@@ -4892,7 +4893,6 @@ static int wpa_config_process_p2p_no_go_freq(
 	return 0;
 }
 
-
 static int wpa_config_process_p2p_device_persistent_mac_addr(
 	const struct global_parse_data *data,
 	struct wpa_config *config, int line, const char *pos)
@@ -5242,6 +5242,7 @@ static const struct global_parse_data global_fields[] = {
 	{ INT_RANGE(disassoc_imminent_rssi_threshold, -120, 0), 0 },
 	{ INT_RANGE(oce, 0, 3), 0 },
 #endif /* CONFIG_MBO */
+	{ INT_RANGE(btm_offload, 0, 1), CFG_CHANGED_DISABLE_BTM_NOTIFY },
 	{ INT(gas_address3), 0 },
 	{ INT_RANGE(ftm_responder, 0, 1), 0 },
 	{ INT_RANGE(ftm_initiator, 0, 1), 0 },
@@ -5253,6 +5254,7 @@ static const struct global_parse_data global_fields[] = {
 	{ STR(dpp_mud_url), 0 },
 #endif /* CONFIG_DPP */
 	{ INT_RANGE(coloc_intf_reporting, 0, 1), 0 },
+	{ INT_RANGE(bss_no_flush_when_down, 0, 1), 0 },
 #ifdef CONFIG_WNM
 	{ INT_RANGE(disable_btm, 0, 1), CFG_CHANGED_DISABLE_BTM },
 	{ INT_RANGE(extended_key_id, 0, 1), 0 },

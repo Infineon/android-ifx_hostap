@@ -246,6 +246,7 @@ struct dpp_asymmetric_key {
 };
 
 #define DPP_MAX_CONF_OBJ 10
+#define DPP_MAX_CHANNELS 32
 
 struct dpp_authentication {
 	struct dpp_global *global;
@@ -365,6 +366,8 @@ struct dpp_authentication {
 	char *groups_override;
 	unsigned int ignore_netaccesskey_mismatch:1;
 #endif /* CONFIG_TESTING_OPTIONS */
+	unsigned short band_list[DPP_MAX_CHANNELS];
+	int band_list_size;
 };
 
 struct dpp_configurator {

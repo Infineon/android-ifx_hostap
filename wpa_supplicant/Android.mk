@@ -8,8 +8,18 @@
 LOCAL_PATH := $(call my-dir)
 PKG_CONFIG ?= pkg-config
 
+$(eval $(call declare-copy-files-license-metadata,external/wpa_supplicant_8/wpa_supplicant,.conf,SPDX-license-identifier-BSD-3-Clause,notice,external/wpa_supplicant_8/LICENSE,))
+
 ifneq ($(BOARD_WPA_SUPPLICANT_DRIVER),)
   CONFIG_DRIVER_$(BOARD_WPA_SUPPLICANT_DRIVER) := y
+endif
+
+ifeq ($(BOARD_WLAN_DEVICE), qcwcn)
+  CONFIG_DRIVER_NL80211_QCA=y
+endif
+
+ifeq ($(BOARD_WLAN_DEVICE), bcmdhd)
+  CONFIG_DRIVER_NL80211_BRCM=y
 endif
 
 include $(LOCAL_PATH)/android.config
@@ -22,8 +32,32 @@ L_CFLAGS += -DVERSION_STR_POSTFIX=\"-$(PLATFORM_VERSION)\"
 # Set Android log name
 L_CFLAGS += -DANDROID_LOG_NAME=\"wpa_supplicant\"
 
+L_CFLAGS += -Wall -Werror
+
+# Keep sometimes uninitialized warnings
+L_CFLAGS += -Wno-error=sometimes-uninitialized
+
+# Disable incompatible pointer type warnings
+L_CFLAGS += -Wno-incompatible-pointer-types
+L_CFLAGS += -Wno-incompatible-pointer-types-discards-qualifiers
+
+# Disable extraneous parentheses warnings
+L_CFLAGS += -Wno-parentheses-equality
+
+# Disable sign compare warnings
+L_CFLAGS += -Wno-sign-compare
+
+# Disable unused function warnings
+L_CFLAGS += -Wno-unused-function
+
+# Disable unused variable warnings
+L_CFLAGS += -Wno-unused-variable
+
 # Disable unused parameter warnings
 L_CFLAGS += -Wno-unused-parameter
+
+# Disable redefined macro warnings
+L_CFLAGS += -Wno-macro-redefined
 
 # Set Android extended P2P functionality
 L_CFLAGS += -DANDROID_P2P
@@ -41,20 +75,24 @@ ifdef CONFIG_NO_ROAMING
 L_CFLAGS += -DCONFIG_NO_ROAMING
 endif
 
+ifeq ($(WIFI_PRIV_CMD_UPDATE_MBO_CELL_STATUS), enabled)
+L_CFLAGS += -DENABLE_PRIV_CMD_UPDATE_MBO_CELL_STATUS
+endif
+
 # Use Android specific directory for control interface sockets
-L_CFLAGS += -DCONFIG_CTRL_IFACE_CLIENT_DIR=\"/data/misc/wifi/sockets\"
-L_CFLAGS += -DCONFIG_CTRL_IFACE_DIR=\"/data/misc/wifi/sockets\"
+L_CFLAGS += -DCONFIG_CTRL_IFACE_CLIENT_DIR=\"/data/vendor/wifi/wpa/sockets\"
+L_CFLAGS += -DCONFIG_CTRL_IFACE_DIR=\"/data/vendor/wifi/wpa/sockets\"
 
 # Use Android specific directory for wpa_cli command completion history
-L_CFLAGS += -DCONFIG_WPA_CLI_HISTORY_DIR=\"/data/misc/wifi\"
+L_CFLAGS += -DCONFIG_WPA_CLI_HISTORY_DIR=\"/data/vendor/wifi/wpa\"
 
 # To force sizeof(enum) = 4
 ifeq ($(TARGET_ARCH),arm)
 L_CFLAGS += -mabi=aapcs-linux
 endif
 
-# C++ flags for binder interface
-L_CPPFLAGS := -std=c++11 -Wall -Werror
+# C++ flags for aidl interface
+L_CPPFLAGS := -Wall -Werror
 # TODO: Remove these allowed warnings later.
 L_CPPFLAGS += -Wno-unused-variable -Wno-unused-parameter
 L_CPPFLAGS += -Wno-unused-private-field
@@ -68,7 +106,6 @@ INCLUDES += $(LOCAL_PATH)/src/eap_common
 INCLUDES += $(LOCAL_PATH)/src/eapol_supp
 INCLUDES += $(LOCAL_PATH)/src/eap_peer
 INCLUDES += $(LOCAL_PATH)/src/eap_server
-INCLUDES += $(LOCAL_PATH)/src/hlr_auc_gw
 INCLUDES += $(LOCAL_PATH)/src/l2_packet
 INCLUDES += $(LOCAL_PATH)/src/radius
 INCLUDES += $(LOCAL_PATH)/src/rsn_supp
@@ -292,6 +329,10 @@ NEED_HMAC_SHA384_KDF=y
 NEED_HMAC_SHA512_KDF=y
 NEED_SHA384=y
 NEED_SHA512=y
+endif
+
+ifdef CONFIG_WAPI_INTERFACE
+L_CFLAGS += -DCONFIG_WAPI_INTERFACE
 endif
 
 ifdef CONFIG_FILS
@@ -1050,6 +1091,7 @@ endif
 
 ifndef CONFIG_TLS
 CONFIG_TLS=openssl
+L_CFLAGS += -DCONFIG_USE_OPENSSL_RNG
 endif
 
 ifdef CONFIG_TLSV11
@@ -1490,9 +1532,9 @@ endif
 L_CFLAGS += $(DBUS_INCLUDE)
 endif
 
-ifdef CONFIG_CTRL_IFACE_BINDER
-WPA_SUPPLICANT_USE_BINDER=y
-L_CFLAGS += -DCONFIG_BINDER -DCONFIG_CTRL_IFACE_BINDER
+ifdef CONFIG_CTRL_IFACE_AIDL
+WPA_SUPPLICANT_USE_AIDL=y
+L_CFLAGS += -DCONFIG_AIDL -DCONFIG_CTRL_IFACE_AIDL
 endif
 
 ifdef CONFIG_READLINE
@@ -1702,7 +1744,10 @@ endif
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := wpa_cli
-LOCAL_MODULE_TAGS := debug
+LOCAL_LICENSE_KINDS := SPDX-license-identifier-BSD SPDX-license-identifier-BSD-3-Clause SPDX-license-identifier-ISC legacy_unencumbered
+LOCAL_LICENSE_CONDITIONS := notice unencumbered
+LOCAL_NOTICE_FILE := $(LOCAL_PATH)/../LICENSE
+LOCAL_PROPRIETARY_MODULE := true
 LOCAL_SHARED_LIBRARIES := libc libcutils liblog
 LOCAL_CFLAGS := $(L_CFLAGS)
 LOCAL_SRC_FILES := $(OBJS_c)
@@ -1712,6 +1757,11 @@ include $(BUILD_EXECUTABLE)
 ########################
 include $(CLEAR_VARS)
 LOCAL_MODULE := wpa_supplicant
+LOCAL_LICENSE_KINDS := SPDX-license-identifier-BSD SPDX-license-identifier-BSD-3-Clause SPDX-license-identifier-ISC legacy_unencumbered
+LOCAL_LICENSE_CONDITIONS := notice unencumbered
+LOCAL_NOTICE_FILE := $(LOCAL_PATH)/../LICENSE
+LOCAL_PROPRIETARY_MODULE := true
+LOCAL_MODULE_RELATIVE_PATH := hw
 ifdef CONFIG_DRIVER_CUSTOM
 LOCAL_STATIC_LIBRARIES := libCustomWifi
 endif
@@ -1724,12 +1774,12 @@ LOCAL_STATIC_LIBRARIES += $(LIB_STATIC_EAP_PROXY)
 LOCAL_SHARED_LIBRARIES += $(LIB_SHARED_EAP_PROXY)
 endif
 ifeq ($(CONFIG_TLS), openssl)
-LOCAL_SHARED_LIBRARIES += libcrypto libssl libkeystore_binder
+LOCAL_SHARED_LIBRARIES += libcrypto libssl libkeystore-wifi-hidl
 endif
 
 # With BoringSSL we need libkeystore-engine in order to provide access to
 # keystore keys.
-LOCAL_SHARED_LIBRARIES += libkeystore-engine
+LOCAL_SHARED_LIBRARIES += libkeystore-engine-wifi-hidl
 
 ifdef CONFIG_DRIVER_NL80211
 ifneq ($(wildcard external/libnl),)
@@ -1744,9 +1794,15 @@ LOCAL_C_INCLUDES := $(INCLUDES)
 ifeq ($(DBUS), y)
 LOCAL_SHARED_LIBRARIES += libdbus
 endif
-ifeq ($(WPA_SUPPLICANT_USE_BINDER), y)
-LOCAL_SHARED_LIBRARIES += libbinder libutils
-LOCAL_STATIC_LIBRARIES += libwpa_binder libwpa_binder_interface
+ifeq ($(WPA_SUPPLICANT_USE_AIDL), y)
+LOCAL_SHARED_LIBRARIES += android.hardware.wifi.supplicant-V1-ndk
+LOCAL_SHARED_LIBRARIES += libutils libbase
+LOCAL_SHARED_LIBRARIES += libbinder_ndk
+LOCAL_STATIC_LIBRARIES += libwpa_aidl
+LOCAL_VINTF_FRAGMENTS := aidl/android.hardware.wifi.supplicant.xml
+ifeq ($(WIFI_HIDL_UNIFIED_SUPPLICANT_SERVICE_RC_ENTRY), true)
+LOCAL_INIT_RC=aidl/android.hardware.wifi.supplicant-service.rc
+endif
 endif
 include $(BUILD_EXECUTABLE)
 
@@ -1778,50 +1834,46 @@ include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE = libwpa_client
+LOCAL_LICENSE_KINDS := SPDX-license-identifier-BSD SPDX-license-identifier-BSD-3-Clause SPDX-license-identifier-ISC legacy_unencumbered
+LOCAL_LICENSE_CONDITIONS := notice unencumbered
+LOCAL_NOTICE_FILE := $(LOCAL_PATH)/../LICENSE
+LOCAL_PROPRIETARY_MODULE := true
 LOCAL_CFLAGS = $(L_CFLAGS)
 LOCAL_SRC_FILES = src/common/wpa_ctrl.c src/utils/os_$(CONFIG_OS).c
 LOCAL_C_INCLUDES = $(INCLUDES)
 LOCAL_SHARED_LIBRARIES := libcutils liblog
-LOCAL_COPY_HEADERS_TO := libwpa_client
-LOCAL_COPY_HEADERS := src/common/wpa_ctrl.h
-LOCAL_COPY_HEADERS += src/common/qca-vendor.h
+LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/wpa_client_include $(LOCAL_PATH)/wpa_client_include/libwpa_client
 include $(BUILD_SHARED_LIBRARY)
 
-ifeq ($(WPA_SUPPLICANT_USE_BINDER), y)
-### Binder interface library ###
+ifeq ($(WPA_SUPPLICANT_USE_AIDL), y)
+### Aidl service library ###
 ########################
-
 include $(CLEAR_VARS)
-LOCAL_MODULE := libwpa_binder_interface
-LOCAL_AIDL_INCLUDES := \
-    $(LOCAL_PATH)/binder \
-    frameworks/native/aidl/binder
-LOCAL_EXPORT_C_INCLUDE_DIRS := \
-    $(LOCAL_PATH)/binder
-LOCAL_CPPFLAGS := $(L_CPPFLAGS)
-LOCAL_SRC_FILES := \
-    binder/binder_constants.cpp \
-    binder/fi/w1/wpa_supplicant/ISupplicant.aidl \
-    binder/fi/w1/wpa_supplicant/ISupplicantCallbacks.aidl \
-    binder/fi/w1/wpa_supplicant/IIface.aidl
-LOCAL_SHARED_LIBRARIES := libbinder
-include $(BUILD_STATIC_LIBRARY)
-
-### Binder service library ###
-########################
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := libwpa_binder
+LOCAL_MODULE := libwpa_aidl
+LOCAL_LICENSE_KINDS := SPDX-license-identifier-BSD SPDX-license-identifier-BSD-3-Clause SPDX-license-identifier-ISC legacy_unencumbered
+LOCAL_LICENSE_CONDITIONS := notice unencumbered
+LOCAL_NOTICE_FILE := $(LOCAL_PATH)/../LICENSE
+LOCAL_VENDOR_MODULE := true
 LOCAL_CPPFLAGS := $(L_CPPFLAGS)
 LOCAL_CFLAGS := $(L_CFLAGS)
 LOCAL_C_INCLUDES := $(INCLUDES)
 LOCAL_SRC_FILES := \
-    binder/binder.cpp binder/binder_manager.cpp \
-    binder/supplicant.cpp binder/iface.cpp
+    aidl/aidl.cpp \
+    aidl/aidl_manager.cpp \
+    aidl/iface_config_utils.cpp \
+    aidl/p2p_iface.cpp \
+    aidl/p2p_network.cpp \
+    aidl/sta_iface.cpp \
+    aidl/sta_network.cpp \
+    aidl/supplicant.cpp
 LOCAL_SHARED_LIBRARIES := \
-    libbinder \
-    libutils
-LOCAL_STATIC_LIBRARIES := libwpa_binder_interface
+    android.hardware.wifi.supplicant-V1-ndk \
+    libbinder_ndk \
+    libbase \
+    libutils \
+    liblog \
+    libssl
+LOCAL_EXPORT_C_INCLUDE_DIRS := \
+    $(LOCAL_PATH)/aidl
 include $(BUILD_STATIC_LIBRARY)
-
-endif # BINDER == y
+endif # WPA_SUPPLICANT_USE_AIDL == y

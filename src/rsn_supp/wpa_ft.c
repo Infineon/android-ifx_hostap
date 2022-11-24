@@ -743,6 +743,18 @@ int wpa_ft_is_completed(struct wpa_sm *sm)
 	return sm->ft_completed;
 }
 
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+int wpa_ft_is_ft_protocol(struct wpa_sm *sm)
+{
+	if (sm == NULL)
+		return 0;
+
+	if (!wpa_key_mgmt_ft(sm->key_mgmt))
+		return 0;
+
+	return sm->ft_protocol;
+}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 void wpa_reset_ft_completed(struct wpa_sm *sm)
 {
@@ -750,6 +762,12 @@ void wpa_reset_ft_completed(struct wpa_sm *sm)
 		sm->ft_completed = 0;
 }
 
+
+void wpa_set_ft_completed(struct wpa_sm *sm)
+{
+	if (sm != NULL)
+		sm->ft_completed = 1;
+}
 
 static int wpa_ft_process_gtk_subelem(struct wpa_sm *sm, const u8 *gtk_elem,
 				      size_t gtk_elem_len)

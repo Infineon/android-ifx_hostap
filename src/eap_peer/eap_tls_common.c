@@ -278,7 +278,7 @@ static int eap_tls_init_connection(struct eap_sm *sm,
 	}
 	if (res) {
 		wpa_printf(MSG_INFO, "TLS: Failed to set TLS connection "
-			   "parameters");
+			   "parameters, error code: %d", res);
 		tls_connection_deinit(data->ssl_ctx, data->conn);
 		data->conn = NULL;
 		return -1;
@@ -778,6 +778,10 @@ int eap_peer_tls_process_helper(struct eap_sm *sm, struct eap_ssl_data *data,
 		wpa_printf(MSG_DEBUG, "SSL: Failed - tls_out available to "
 			   "report error (len=%u)",
 			   (unsigned int) wpabuf_len(data->tls_out));
+		if (sm->eapol_cb->notify_open_ssl_failure) {
+			sm->eapol_cb->notify_open_ssl_failure(sm->eapol_ctx,
+				"TLS processing has failed");
+		}
 		ret = -1;
 		/* TODO: clean pin if engine used? */
 		if (wpabuf_len(data->tls_out) == 0) {

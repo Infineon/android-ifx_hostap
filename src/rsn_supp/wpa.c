@@ -32,7 +32,8 @@
 #include "pmksa_cache.h"
 #include "wpa_i.h"
 #include "wpa_ie.h"
-
+#include "wpa_supplicant_i.h"
+#include "driver_i.h"
 
 static const u8 null_rsc[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
@@ -573,7 +574,7 @@ int wpa_supplicant_send_2_of_4(struct wpa_sm *sm, const unsigned char *dst,
 
 	os_memcpy(reply->key_nonce, nonce, WPA_NONCE_LEN);
 
-	wpa_dbg(sm->ctx->msg_ctx, MSG_DEBUG, "WPA: Sending EAPOL-Key 2/4");
+	wpa_dbg(sm->ctx->msg_ctx, MSG_INFO, "WPA: Sending EAPOL-Key 2/4");
 	return wpa_eapol_key_send(sm, ptk, ver, dst, ETH_P_EAPOL, rbuf, rlen,
 				  key_mic);
 }
@@ -695,7 +696,7 @@ static void wpa_supplicant_process_1_of_4(struct wpa_sm *sm,
 	}
 
 	wpa_sm_set_state(sm, WPA_4WAY_HANDSHAKE);
-	wpa_dbg(sm->ctx->msg_ctx, MSG_DEBUG, "WPA: RX message 1 of 4-Way "
+	wpa_dbg(sm->ctx->msg_ctx, MSG_INFO, "WPA: RX message 1 of 4-Way "
 		"Handshake from " MACSTR " (ver=%d)", MAC2STR(src_addr), ver);
 
 	os_memset(&ie, 0, sizeof(ie));
@@ -1648,7 +1649,7 @@ int wpa_supplicant_send_4_of_4(struct wpa_sm *sm, const unsigned char *dst,
 	key_mic = (u8 *) (reply + 1);
 	WPA_PUT_BE16(key_mic + mic_len, 0);
 
-	wpa_dbg(sm->ctx->msg_ctx, MSG_DEBUG, "WPA: Sending EAPOL-Key 4/4");
+	wpa_dbg(sm->ctx->msg_ctx, MSG_INFO, "WPA: Sending EAPOL-Key 4/4");
 	return wpa_eapol_key_send(sm, ptk, ver, dst, ETH_P_EAPOL, rbuf, rlen,
 				  key_mic);
 }
@@ -1663,7 +1664,7 @@ static void wpa_supplicant_process_3_of_4(struct wpa_sm *sm,
 	struct wpa_eapol_ie_parse ie;
 
 	wpa_sm_set_state(sm, WPA_4WAY_HANDSHAKE);
-	wpa_dbg(sm->ctx->msg_ctx, MSG_DEBUG, "WPA: RX message 3 of 4-Way "
+	wpa_dbg(sm->ctx->msg_ctx, MSG_INFO, "WPA: RX message 3 of 4-Way "
 		"Handshake from " MACSTR " (ver=%d)", MAC2STR(sm->bssid), ver);
 
 	key_info = WPA_GET_BE16(key->key_info);
@@ -3896,6 +3897,46 @@ void wpa_sm_external_pmksa_cache_flush(struct wpa_sm *sm, void *network_ctx)
 	pmksa_cache_flush(sm->pmksa, network_ctx, NULL, 0, true);
 }
 
+#ifdef CONFIG_DRIVER_NL80211_BRCM
+void wpa_sm_install_pmk(struct wpa_sm *sm)
+{
+	/* In case the driver wants to handle re-assocs, pass it down the PMK. */
+	if (wpa_sm_set_key(sm, wpa_cipher_to_alg(sm->pairwise_cipher), NULL, 0, 0, NULL, 0,
+		(u8*)sm->pmk, sm->pmk_len, KEY_FLAG_PMK) < 0) {
+		wpa_hexdump(MSG_DEBUG, "PSK: Install PMK to the driver for driver reassociations",
+			(u8*)sm->pmk, sm->pmk_len);
+		/* No harm if the driver doesn't support. */
+		wpa_msg(sm->ctx->msg_ctx, MSG_DEBUG,
+			"WPA: Failed to set PMK to the driver");
+	}
+}
+
+void wpa_sm_notify_brcm_ft_reassoc(struct wpa_sm *sm, const u8 *bssid)
+{
+	u8 buf[256];
+	struct wpa_supplicant *wpa_s = sm->ctx->ctx;
+
+	wpa_dbg(sm->ctx->msg_ctx, MSG_DEBUG,
+		"WPA: BRCM FT Reassociation event - clear replay counter");
+	os_memcpy(sm->bssid, bssid, ETH_ALEN);
+	os_memset(sm->rx_replay_counter, 0, WPA_REPLAY_COUNTER_LEN);
+	sm->rx_replay_counter_set = 0;
+
+	if (wpa_drv_driver_cmd(wpa_s, "GET_FTKEY", (char *)buf, sizeof(buf)) < 0) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_ERROR,
+			"WPA: Failed to get FT KEY information");
+		wpa_supplicant_deauthenticate(
+			wpa_s, WLAN_REASON_DEAUTH_LEAVING);
+
+	} else {
+		/* update kck and kek */
+		os_memcpy(sm->ptk.kck, buf, 16);
+		os_memcpy(sm->ptk.kek, buf + 16, 16);
+		wpa_msg(sm->ctx->msg_ctx, MSG_INFO,
+			"WPA: Updated KCK and KEK after FT reassoc");
+	}
+}
+#endif /* CONFIG_DRIVER_NL80211_BRCM */
 
 #ifdef CONFIG_WNM
 int wpa_wnmsleep_install_key(struct wpa_sm *sm, u8 subelem_id, u8 *buf)

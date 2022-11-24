@@ -339,4 +339,18 @@ struct wpabuf * ieee802_11_defrag_data(struct ieee802_11_elems *elems,
 struct wpabuf * ieee802_11_defrag(struct ieee802_11_elems *elems,
 				  u8 eid, u8 eid_ext);
 
+int get_max_nss_capability(struct ieee802_11_elems *elems, int parse_for_rx);
+
+struct supported_chan_width {
+	u8 is_160_supported;
+	u8 is_80p80_supported;
+};
+
+struct supported_chan_width get_supported_channel_width(struct ieee802_11_elems *elems);
+
+enum chan_width get_operation_channel_width(struct ieee802_11_elems *elems);
+
+enum chan_width get_sta_operation_chan_width(enum chan_width ap_operation_chan_width,
+					     struct supported_chan_width sta_supported_width);
+
 #endif /* IEEE802_11_COMMON_H */
