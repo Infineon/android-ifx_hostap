@@ -1116,5 +1116,24 @@ static inline int wpa_drv_dpp_listen(struct wpa_supplicant *wpa_s, bool enable)
 		return 0;
 	return wpa_s->driver->dpp_listen(wpa_s->drv_priv, enable);
 }
+#ifdef CONFIG_DRIVER_NL80211_IFX
+#ifdef CONFIG_TWT_OFFLOAD_IFX
+static inline int wpa_drv_setup_twt(struct wpa_supplicant *wpa_s,
+				    struct drv_setup_twt_params *params)
+{
+	if (!wpa_s->driver->setup_twt)
+		return -1;
+	return wpa_s->driver->setup_twt(wpa_s->drv_priv, params);
+}
+static inline int wpa_drv_teardown_twt(struct wpa_supplicant *wpa_s,
+				       struct drv_teardown_twt_params *params)
+{
+	if (!wpa_s->driver->teardown_twt)
+		return -1;
+	return wpa_s->driver->teardown_twt(wpa_s->drv_priv, params);
+}
+
+#endif /* CONFIG_TWT_OFFLOAD_IFX */
+#endif /* CONFIG_DRIVER_NL80211_IFX */
 
 #endif /* DRIVER_I_H */

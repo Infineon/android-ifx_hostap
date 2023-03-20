@@ -3,5 +3,4 @@
 include:
   - project: 'repo/wifi-firmware/helpers'
     ref: master
-    file: 'gitlab/.gitlab-ci.yml'
-
+    file: 'gitlab/.gitlab-ci.yml' 

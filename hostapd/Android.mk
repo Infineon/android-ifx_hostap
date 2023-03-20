@@ -16,6 +16,14 @@ ifeq ($(WPA_BUILD_HOSTAPD),true)
 
 include $(LOCAL_PATH)/android.config
 
+ifdef CONFIG_DRIVER_NL80211_IFX
+CFLAGS += -DCONFIG_DRIVER_NL80211_IFX
+endif # CONFIG_DRIVER_NL80211_IFX == y
+
+ifdef CONFIG_TWT_OFFLOAD_IFX
+L_CFLAGS += -DCONFIG_TWT_OFFLOAD_IFX
+endif # CONFIG_TWT_OFFLOAD_IFX == y
+
 # To ignore possible wrong network configurations
 L_CFLAGS = -DWPA_IGNORE_CONFIG_ERRORS
 

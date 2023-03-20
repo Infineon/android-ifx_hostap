@@ -375,12 +375,14 @@ std::string CreateHostapdConfig(
 		}
 		encryption_config_as_string = StringPrintf(
 			"wpa=2\n"
+			"sae_pwe=%d\n"
 			"rsn_pairwise=%s\n"
 			"wpa_key_mgmt=WPA-PSK SAE\n"
 			"ieee80211w=1\n"
 			"sae_require_mfp=1\n"
 			"wpa_passphrase=%s\n"
 			"sae_password=%s",
+                        is_6Ghz_band_only ? 1 : 2,
 			is_60Ghz_band_only ? "GCMP" : "CCMP",
 			nw_params.passphrase.c_str(),
 			nw_params.passphrase.c_str());

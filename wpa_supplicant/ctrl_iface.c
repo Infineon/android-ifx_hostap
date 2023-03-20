@@ -3161,6 +3161,7 @@ static int wpa_supplicant_ctrl_iface_scan_results(
 {
 	char *pos, *end;
 	struct wpa_bss *bss;
+	const u8 *owe, *ieowe;
 	int ret;
 
 	pos = buf;
@@ -3172,6 +3173,15 @@ static int wpa_supplicant_ctrl_iface_scan_results(
 	pos += ret;
 
 	dl_list_for_each(bss, &wpa_s->bss_id, struct wpa_bss, list_id) {
+	        ieowe = wpa_bss_get_ie(bss, WLAN_EID_RSN);
+		owe = wpa_bss_get_vendor_ie(bss, OWE_IE_VENDOR_TYPE);
+		/* As per OWE spec the STA should be not be shown
+		 * the OWE transition BSSID in its scan results
+		 */
+		if (owe && ieowe) {
+			wpa_printf(MSG_DEBUG, "\nWe are skipping transition OWE BSSID\n");
+			continue;
+		}
 		ret = wpa_supplicant_ctrl_iface_scan_result(wpa_s, bss, pos,
 							    end - pos);
 		if (ret < 0 || ret >= end - pos)
@@ -8289,6 +8299,13 @@ static int wpa_supplicant_driver_cmd(struct wpa_supplicant *wpa_s, char *cmd,
 				p2p_set_country(p2p, country);
 			}
 		}
+                wpa_printf(MSG_ERROR, "cmd = %s", cmd);
+
+		if (os_strncasecmp(cmd, "BSSCOLOR", 8) == 0) {
+                wpa_printf(MSG_ERROR, "buflen=%zu", buflen);
+		ret = buflen;
+		return ret;
+		}
 		ret = os_snprintf(buf, buflen, "%s\n", "OK");
 		if (os_snprintf_error(buflen, ret))
 			ret = -1;
@@ -9966,7 +9983,7 @@ static int wpas_ctrl_resend_assoc(struct wpa_supplicant *wpa_s)
 	return -1;
 #endif /* CONFIG_SME */
 }
-
+#endif /* CONFIG_TESTING_OPTIONS */
 
 static int wpas_ctrl_iface_send_twt_setup(struct wpa_supplicant *wpa_s,
 					  const char *cmd)
@@ -9976,6 +9993,7 @@ static int wpas_ctrl_iface_send_twt_setup(struct wpa_supplicant *wpa_s,
 	int mantissa = 8192;
 	u8 min_twt = 255;
 	unsigned long long twt = 0;
+	unsigned long long twt_offset = 0;
 	bool requestor = true;
 	int setup_cmd = 0;
 	bool trigger = true;
@@ -10012,6 +10030,10 @@ static int wpas_ctrl_iface_send_twt_setup(struct wpa_supplicant *wpa_s,
 	if (tok_s)
 		sscanf(tok_s + os_strlen(" twt="), "%llu", &twt);
 
+	tok_s = os_strstr(cmd, " twt_offset=");
+	if (tok_s)
+		sscanf(tok_s + os_strlen(" twt_offset="), "%llu", &twt_offset);
+
 	tok_s = os_strstr(cmd, " requestor=");
 	if (tok_s)
 		requestor = atoi(tok_s + os_strlen(" requestor="));
@@ -10044,10 +10066,20 @@ static int wpas_ctrl_iface_send_twt_setup(struct wpa_supplicant *wpa_s,
 	if (tok_s)
 		control = atoi(tok_s + os_strlen(" control="));
 
+#ifdef CONFIG_TWT_OFFLOAD_IFX
+        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt offload setup");
+	return wpas_twt_offload_send_setup(wpa_s, dtok, exponent, mantissa,
+					   min_twt, setup_cmd, twt, twt_offset,
+					   requestor, trigger, implicit, flow_type,
+					   flow_id, protection, twt_channel,
+					   control);
+#else
+        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt setup");
 	return wpas_twt_send_setup(wpa_s, dtok, exponent, mantissa, min_twt,
 				   setup_cmd, twt, requestor, trigger, implicit,
 				   flow_type, flow_id, protection, twt_channel,
 				   control);
+#endif /* CONFIG_TWT_OFFLOAD_IFX */
 }
 
 
@@ -10060,11 +10092,19 @@ static int wpas_ctrl_iface_send_twt_teardown(struct wpa_supplicant *wpa_s,
 	tok_s = os_strstr(cmd, " flags=");
 	if (tok_s)
 		flags = atoi(tok_s + os_strlen(" flags="));
+        
+#ifdef CONFIG_TWT_OFFLOAD_IFX
+        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt offload teardown");
+
+	return wpas_twt_offload_send_teardown(wpa_s, flags);
+#else
+        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt teardown");
 
 	return wpas_twt_send_teardown(wpa_s, flags);
+#endif /* CONFIG_TWT_OFFLOAD_IFX */
 }
 
-#endif /* CONFIG_TESTING_OPTIONS */
+//endif /* CONFIG_TESTING_OPTIONS */
 
 
 static int wpas_ctrl_vendor_elem_add(struct wpa_supplicant *wpa_s, char *cmd)
@@ -12175,6 +12215,7 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 		sme_event_unprot_disconnect(
 			wpa_s, wpa_s->bssid, NULL,
 			WLAN_REASON_CLASS2_FRAME_FROM_NONAUTH_STA);
+#endif /* CONFIG_TESTING_OPTIONS */
 	} else if (os_strncmp(buf, "TWT_SETUP ", 10) == 0) {
 		if (wpas_ctrl_iface_send_twt_setup(wpa_s, buf + 9))
 			reply_len = -1;
@@ -12187,7 +12228,7 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 	} else if (os_strcmp(buf, "TWT_TEARDOWN") == 0) {
 		if (wpas_ctrl_iface_send_twt_teardown(wpa_s, ""))
 			reply_len = -1;
-#endif /* CONFIG_TESTING_OPTIONS */
+//#endif /* CONFIG_TESTING_OPTIONS */
 	} else if (os_strncmp(buf, "VENDOR_ELEM_ADD ", 16) == 0) {
 		if (wpas_ctrl_vendor_elem_add(wpa_s, buf + 16) < 0)
 			reply_len = -1;
