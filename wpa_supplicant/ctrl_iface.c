@@ -10067,14 +10067,14 @@ static int wpas_ctrl_iface_send_twt_setup(struct wpa_supplicant *wpa_s,
 		control = atoi(tok_s + os_strlen(" control="));
 
 #ifdef CONFIG_TWT_OFFLOAD_IFX
-        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt offload setup");
+        wpa_printf(MSG_DEBUG,"ctrl_iface calling twt offload setup");
 	return wpas_twt_offload_send_setup(wpa_s, dtok, exponent, mantissa,
 					   min_twt, setup_cmd, twt, twt_offset,
 					   requestor, trigger, implicit, flow_type,
 					   flow_id, protection, twt_channel,
 					   control);
 #else
-        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt setup");
+        wpa_printf(MSG_DEBUG,"ctrl_iface calling twt setup");
 	return wpas_twt_send_setup(wpa_s, dtok, exponent, mantissa, min_twt,
 				   setup_cmd, twt, requestor, trigger, implicit,
 				   flow_type, flow_id, protection, twt_channel,
@@ -10094,11 +10094,11 @@ static int wpas_ctrl_iface_send_twt_teardown(struct wpa_supplicant *wpa_s,
 		flags = atoi(tok_s + os_strlen(" flags="));
         
 #ifdef CONFIG_TWT_OFFLOAD_IFX
-        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt offload teardown");
+        wpa_printf(MSG_DEBUG,"ctrl_iface calling twt offload teardown");
 
 	return wpas_twt_offload_send_teardown(wpa_s, flags);
 #else
-        wpa_printf(MSG_ERROR,"adew ctrl_iface calling twt teardown");
+        wpa_printf(MSG_DEBUG,"ctrl_iface calling twt teardown");
 
 	return wpas_twt_send_teardown(wpa_s, flags);
 #endif /* CONFIG_TWT_OFFLOAD_IFX */

@@ -59,7 +59,9 @@ int wpas_twt_offload_send_setup(struct wpa_supplicant *wpa_s, u8 dtok, int expon
 	params.flow_id = 0;
 	params.bcast_twt_id = 0;
         
-	wpa_printf(MSG_ERROR,"adew wpas_twt_offload_send_setup");
+	wpa_printf(MSG_DEBUG,
+			"TWT: Offload Setup request, dtok: %d  exponent: %d  mantissa: %d
+			min-twt: %d", dtok, exponent, mantissa, min_twt);
 	/* Setup Command Field - IEEE 802.11ax-2021 Table 9-297 */
 	switch(setup_cmd) {
 		case 0: params.setup_cmd = IFX_TWT_OPER_SETUP_CMD_TYPE_REQUEST;
@@ -119,7 +121,6 @@ int wpas_twt_offload_send_setup(struct wpa_supplicant *wpa_s, u8 dtok, int expon
 
 	params.twt_info_frame_disabled = twt_info_frame_disabled;
 	params.min_twt_unit = min_twt_unit;		/* 1 - in TUs, 0 - in 256us */
-        wpa_printf(MSG_ERROR,"adew calling wpa_drv_setup in twt.c");
 	if (wpa_drv_setup_twt(wpa_s, &params)) {
 		wpa_printf(MSG_ERROR, "TWT offload: Failed to send TWT Setup Request");
 		ret = -ECANCELED;
@@ -149,7 +150,7 @@ int wpas_twt_offload_send_teardown(struct wpa_supplicant *wpa_s, u8 flags)
 	negotiation_type = (flags & 0x60) >> 5;	/* Negotiation type : Bit 5-6	*/
 	teardown_all_twt = (flags & 0x80) >> 7;	/* Teardown all TWT : Bit 7	*/
 
-        wpa_printf(MSG_ERROR,"adew wpas_twt_offload_send_teardown");
+	wpa_printf(MSG_DEBUG, "TWT: Offload Teardown request, flags: 0x%x", flags);
 	/* Negotiation Type Field - IEEE 802.11ax-2021 Table 9.296a */
 	switch(negotiation_type) {
 		case 0:	/* Individual TWT */
@@ -174,7 +175,6 @@ int wpas_twt_offload_send_teardown(struct wpa_supplicant *wpa_s, u8 flags)
 	}
 
 	params.teardown_all_twt = teardown_all_twt;
-        wpa_printf(MSG_ERROR, "TWT offload: Failed to send TWT Setup Request");
 	if (wpa_drv_teardown_twt(wpa_s, &params)) {
 		wpa_printf(MSG_ERROR, "TWT offload: Failed to send TWT Teardown frame");
 		ret = -ECANCELED;
@@ -207,7 +207,7 @@ int wpas_twt_send_setup(struct wpa_supplicant *wpa_s, u8 dtok, int exponent,
 	struct wpabuf *buf;
 	u16 req_type = 0;
 	int ret = 0;
-        wpa_printf(MSG_ERROR,"adew wpas_twt_send_setup in twt.c");
+        wpa_printf(MSG_DEBUG,"Enter wpas_twt_send_setup");
 	if (wpa_s->wpa_state != WPA_COMPLETED || !wpa_s->current_ssid) {
 		wpa_printf(MSG_ERROR,
 			   "TWT: No connection - cannot send TWT Setup frame");
@@ -223,7 +223,7 @@ int wpas_twt_send_setup(struct wpa_supplicant *wpa_s, u8 dtok, int exponent,
 		return -ENOMEM;
 	}
 
-	wpa_printf(MSG_ERROR,
+	wpa_printf(MSG_DEBUG,
 		   "TWT: Setup request, dtok: %d  exponent: %d  mantissa: %d  min-twt: %d",
 		   dtok, exponent, mantissa, min_twt);
 
@@ -279,7 +279,7 @@ int wpas_twt_send_teardown(struct wpa_supplicant *wpa_s, u8 flags)
 {
 	struct wpabuf *buf;
 	int ret = 0;
-        wpa_printf(MSG_ERROR,"adew wpas_twt_send_teardown in twt.c");
+        wpa_printf(MSG_ERROR,"Enter wpas_twt_send_teardown");
 	if (wpa_s->wpa_state != WPA_COMPLETED || !wpa_s->current_ssid) {
 		wpa_printf(MSG_ERROR,
 			   "TWT: No connection - cannot send TWT Teardown frame");
@@ -294,7 +294,7 @@ int wpas_twt_send_teardown(struct wpa_supplicant *wpa_s, u8 flags)
 		return -ENOMEM;
 	}
 
-	wpa_printf(MSG_ERROR, "TWT: Teardown request, flags: 0x%x", flags);
+	wpa_printf(MSG_DEBUG, "TWT: Teardown request, flags: 0x%x", flags);
 
 	wpabuf_put_u8(buf, WLAN_ACTION_S1G);
 	wpabuf_put_u8(buf, S1G_ACT_TWT_TEARDOWN);
