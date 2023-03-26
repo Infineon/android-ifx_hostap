@@ -60,8 +60,8 @@ int wpas_twt_offload_send_setup(struct wpa_supplicant *wpa_s, u8 dtok, int expon
 	params.bcast_twt_id = 0;
         
 	wpa_printf(MSG_DEBUG,
-			"TWT: Offload Setup request, dtok: %d  exponent: %d  mantissa: %d
-			min-twt: %d", dtok, exponent, mantissa, min_twt);
+		"TWT: Offload Setup request, dtok: %d  exponent: %d  mantissa: %dmin-twt: %d",
+		dtok, exponent, mantissa, min_twt);
 	/* Setup Command Field - IEEE 802.11ax-2021 Table 9-297 */
 	switch(setup_cmd) {
 		case 0: params.setup_cmd = IFX_TWT_OPER_SETUP_CMD_TYPE_REQUEST;
